@@ -1,0 +1,560 @@
+/* seekcap.c — продуктовый API захвата (E2). Конвейер перенесён из seekd.c
+ * (E1, проверен на железе 05.11.2026: 6.9 к/с, 0 ошибок, reconnect-устойчив).
+ *
+ * Поток рабочий: libusb-события + pump. Callback-доставка готового кадра.
+ *darwin-правило: control-трансферы только из рабочего потока (см. skill).
+ */
+#include "seekcap.h"
+
+#include <libusb-1.0/libusb.h>
+#include <math.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+
+#define VID 0x289D
+#define PID 0x0011
+#define EP_IN 0x81
+#define BMREQ_OUT 0x41
+#define BMREQ_IN 0xC1
+
+#define CMD_SET_OPERATION_MODE 60
+#define CMD_SET_IMAGE_PROCESSING_MODE 62
+#define CMD_READ_CHIP_ID 54
+#define CMD_GET_FACTORY_SETTINGS 88
+#define CMD_SET_FACTORY_SETTINGS_FEATURES 86
+#define CMD_GET_FIRMWARE_INFO 78
+#define CMD_SET_FIRMWARE_INFO_FEATURES 85
+#define CMD_START_GET_IMAGE_TRANSFER 83
+#define CMD_TARGET_PLATFORM 84
+
+struct skcap {
+    /* внешний API */
+    skcap_cb cb;
+    void *user;
+    bool *hot;
+
+    pthread_t th;
+    volatile int quit;
+    int connected;
+    pthread_mutex_t mtx;   /* защита рантайм-настроек от рабочего потока */
+
+    libusb_context *ctx;
+    libusb_device_handle *h;
+
+    /* конвейер */
+    uint8_t *asm_buf;
+    size_t fill;
+    size_t req_bytes;
+    int need_request;      /* 1 = pump должен сделать request; -1 = reconnect */
+    volatile int chunk_inflight; /* ровно один chunk-URB в полёте           */
+    uint16_t *ff;
+
+    /* статистика */
+    long images, ffs, errors, resyncs;
+    double t_fps_start;
+    int n_fps;
+    double fps;
+
+    /* настройки (под mtx) */
+    sk_palette_t pal;
+    float smooth; int motion, spatial; int den_reset;
+    bool span_manual; double man_lo, man_hi;
+    sk_scene_t scene;
+    sk_planck_t planck; bool planck_set;
+
+    /* дампы */
+    char dumpdir[512];
+    int frame_idx;
+
+    /* core-состояние (только рабочий поток) */
+    sk_denoise_t den;
+    sk_tonemap_t tm;
+    uint8_t lut[256][3];
+
+    /* кадры для колбэка */
+    uint8_t rgb[SK_W * SK_H * 3];
+    double temp[SK_W * SK_H];
+    uint16_t roi[SK_W * SK_H];
+};
+
+static double now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+static int cmd_out(skcap_t *c, int cmd, const uint8_t *data, int len) {
+    int r = libusb_control_transfer(c->h, BMREQ_OUT, (uint8_t)cmd, 0, 0,
+                                    (unsigned char *)data, (uint16_t)len, 500);
+    return r < 0 ? r : 0;
+}
+static int cmd_in(skcap_t *c, int cmd, uint8_t *buf, int len) {
+    int r = libusb_control_transfer(c->h, BMREQ_IN, (uint8_t)cmd, 0, 0,
+                                    buf, (uint16_t)len, 500);
+    return r < 0 ? r : 0;
+}
+static int request_frame(skcap_t *c) {
+    uint32_t words = SK_RAW_WORDS;
+    uint8_t p[4] = {(uint8_t)(words & 0xFF), (uint8_t)((words >> 8) & 0xFF),
+                    (uint8_t)((words >> 16) & 0xFF),
+                    (uint8_t)((words >> 24) & 0xFF)};
+    return cmd_out(c, CMD_START_GET_IMAGE_TRANSFER, p, 4);
+}
+
+static void submit_chunk(skcap_t *c);
+
+static void process_frame(skcap_t *c, uint16_t *raw) {
+    uint32_t counter;
+    uint16_t fid;
+    if (sk_frame_validate(raw, &counter, &fid) != SK_OK) {
+        c->resyncs++;
+        return;
+    }
+    if (fid == SK_FID_FF) {
+        if (!c->ff) c->ff = (uint16_t *)malloc(SK_RAW_BYTES);
+        if (c->ff) memcpy(c->ff, raw, SK_RAW_BYTES);
+        c->ffs++;
+        return;
+    }
+    if (fid != SK_FID_IMAGE || !c->ff) return;
+
+    static float hot[SK_W * SK_H];
+    static double den64[SK_W * SK_H];
+    static uint8_t gray[SK_W * SK_H];
+    bool from_f32 = false;
+    pthread_mutex_lock(&c->mtx);
+    if (c->den_reset) { sk_denoise_reset(&c->den); c->den_reset = 0; }
+    if (c->span_manual) {
+        c->tm.automatic = false; c->tm.lo = c->man_lo; c->tm.hi = c->man_hi;
+    } else {
+        c->tm.automatic = true;
+    }
+    sk_scene_t scene = c->scene;
+    sk_planck_t planck = c->planck;
+    pthread_mutex_unlock(&c->mtx);
+
+    sk_frame_apply_ff(raw, c->ff, c->roi);
+    sk_hotmap_replace(c->roi, c->hot, hot);
+    sk_denoise_frame(&c->den, hot, den64, &from_f32);
+    sk_tonemap_apply(&c->tm, den64, from_f32, gray);
+    sk_palette_map(c->lut, gray, c->rgb);
+
+    for (size_t i = 0; i < (size_t)SK_W * SK_H; i++)
+        c->temp[i] = sk_signal_to_celsius(&planck, &scene, den64[i]);
+
+    c->images++;
+    c->n_fps++;
+    double t = now();
+    if (t - c->t_fps_start > 2.0) {
+        c->fps = c->n_fps / (t - c->t_fps_start);
+        c->t_fps_start = t;
+        c->n_fps = 0;
+    }
+
+    if (c->dumpdir[0]) {
+        char p[600];
+        snprintf(p, sizeof(p), "%s/img_%04d.raw", c->dumpdir, c->frame_idx);
+        FILE *f = fopen(p, "wb");
+        if (f) { fwrite(raw, 1, SK_RAW_BYTES, f); fclose(f); }
+        snprintf(p, sizeof(p), "%s/ff_%04d.raw", c->dumpdir, c->frame_idx);
+        f = fopen(p, "wb");
+        if (f) { fwrite(c->ff, 1, SK_RAW_BYTES, f); fclose(f); }
+        c->frame_idx++;
+    }
+
+    if (c->cb) {
+        skcap_frame_t fr = {
+            .rgb = c->rgb, .temp = c->temp, .signal = c->roi,
+            .lo = c->tm.lo, .hi = c->tm.hi,
+            .mean_signal = sk_roi_mean(c->roi),
+            .fps = c->fps,
+            .frames = c->images, .ffs = c->ffs,
+            .errors = c->errors, .resyncs = c->resyncs,
+        };
+        c->cb(c->user, &fr);
+    }
+}
+
+static size_t find_magic(const uint8_t *b, size_t n) {
+    if (n < (size_t)SK_RAW_BYTES) return (size_t)-1;
+    size_t last = n - (size_t)SK_RAW_BYTES;
+    for (size_t i = 0; i <= last; i += 2) {
+        uint16_t w0 = (uint16_t)(b[i] | (b[i + 1] << 8));
+        if (w0 != SK_FRAME_MAGIC) continue;
+        uint16_t fid = (uint16_t)(b[i + 4] | (b[i + 5] << 8));
+        if (fid == 1 || fid == 3 || fid == 6 || fid == 20) return i;
+    }
+    return (size_t)-1;
+}
+
+static void LIBUSB_CALL chunk_cb(struct libusb_transfer *t) {
+    skcap_t *c = (skcap_t *)t->user_data;
+    c->chunk_inflight = 0;
+    if (t->status == LIBUSB_TRANSFER_COMPLETED && t->actual_length > 0) {
+        /* только буферизация + submit: control-трансферы из callback на
+         * darwin вешают pipe (LIBUSB_ERROR_BUSY) */
+        if (c->fill + (size_t)t->actual_length > 2 * (size_t)SK_RAW_BYTES) {
+            size_t drop = c->fill / 2;
+            drop &= ~(size_t)1;
+            memmove(c->asm_buf, c->asm_buf + drop, c->fill - drop);
+            c->fill -= drop;
+            c->resyncs++;
+        }
+        memcpy(c->asm_buf + c->fill, t->buffer, (size_t)t->actual_length);
+        c->fill += (size_t)t->actual_length;
+        c->req_bytes += (size_t)t->actual_length;
+        if (!c->quit) submit_chunk(c);
+    } else if (t->status == LIBUSB_TRANSFER_CANCELLED) {
+        /* штатное закрытие */
+    } else {
+        c->errors++;
+        if (!c->quit) {
+            if (t->status == LIBUSB_TRANSFER_NO_DEVICE ||
+                t->status == LIBUSB_TRANSFER_ERROR) {
+                c->need_request = -1; /* рабочий поток переподключится */
+            } else {
+                libusb_clear_halt(c->h, EP_IN);
+                c->fill = 0;
+                c->req_bytes = 0;
+                c->need_request = 1; /* pump сделает request + submit */
+            }
+        }
+    }
+}
+
+static void pump(skcap_t *c) {
+    while (c->fill >= (size_t)SK_RAW_BYTES) {
+        size_t p = find_magic(c->asm_buf, c->fill);
+        if (p == (size_t)-1) {
+            size_t drop = c->fill - SK_BULK_CHUNK;
+            drop &= ~(size_t)1;
+            memmove(c->asm_buf, c->asm_buf + drop, c->fill - drop);
+            c->fill -= drop;
+            c->resyncs++;
+            break;
+        }
+        process_frame(c, (uint16_t *)(c->asm_buf + p));
+        size_t used = p + SK_RAW_BYTES;
+        memmove(c->asm_buf, c->asm_buf + used, c->fill - used);
+        c->fill -= used;
+    }
+    if (c->need_request == 1 || c->req_bytes >= (size_t)SK_RAW_BYTES) {
+        if (request_frame(c) == 0) {
+            c->need_request = 0;
+            c->req_bytes = 0;
+        } else {
+            c->errors++;
+        }
+    }
+    /* единственный URB в полёте: после request (или сбоя) гарантированно
+     * держим конвейер живым */
+    if (!c->chunk_inflight && !c->need_request && c->connected)
+        submit_chunk(c);
+}
+
+static void submit_chunk(skcap_t *c) {
+    if (c->quit || !c->h) return;
+    struct libusb_transfer *t = libusb_alloc_transfer(0);
+    unsigned char *b = (unsigned char *)malloc(SK_BULK_CHUNK);
+    if (!t || !b) {
+        c->errors++;
+        free(b);
+        if (t) libusb_free_transfer(t);
+        return;
+    }
+    libusb_fill_bulk_transfer(t, c->h, EP_IN, b, SK_BULK_CHUNK, chunk_cb, c,
+                              1000);
+    t->flags = LIBUSB_TRANSFER_FREE_BUFFER | LIBUSB_TRANSFER_FREE_TRANSFER;
+    if (libusb_submit_transfer(t) < 0) {
+        c->errors++;
+        free(b);
+        libusb_free_transfer(t);
+    } else {
+        c->chunk_inflight = 1;
+    }
+}
+
+static int init_cam(skcap_t *c) {
+    libusb_set_configuration(c->h, 1);
+    if (libusb_claim_interface(c->h, 0) < 0) return -1;
+    unsigned char tmp[4096];
+    for (int i = 0; i < 8; i++)
+        libusb_bulk_transfer(c->h, EP_IN, tmp, sizeof(tmp), NULL, 100);
+
+    uint8_t one = 1;
+    cmd_out(c, CMD_TARGET_PLATFORM, &one, 1);
+    uint8_t z2[2] = {0, 0};
+    cmd_out(c, CMD_SET_OPERATION_MODE, z2, 2);
+    uint8_t fw[4], chip[12], b64[64];
+    cmd_in(c, CMD_GET_FIRMWARE_INFO, fw, 4);
+    cmd_in(c, CMD_READ_CHIP_ID, chip, 12);
+
+    uint8_t fs6[6] = {6, 0, 8, 0, 0, 0};
+    cmd_out(c, CMD_SET_FACTORY_SETTINGS_FEATURES, fs6, 6);
+    uint8_t b12[12];
+    cmd_in(c, CMD_GET_FACTORY_SETTINGS, b12, 12);
+    uint8_t f2[2] = {0x17, 0};
+    cmd_out(c, CMD_SET_FIRMWARE_INFO_FEATURES, f2, 2);
+    cmd_in(c, CMD_GET_FIRMWARE_INFO, b64, 64);
+    uint8_t f1a[6] = {1, 0, 0, 6, 0, 0};
+    cmd_out(c, CMD_SET_FACTORY_SETTINGS_FEATURES, f1a, 6);
+    cmd_in(c, CMD_GET_FACTORY_SETTINGS, b64, 2);
+    uint8_t f1b[6] = {1, 0, 1, 6, 0, 0};
+    cmd_out(c, CMD_SET_FACTORY_SETTINGS_FEATURES, f1b, 6);
+    cmd_in(c, CMD_GET_FACTORY_SETTINGS, b64, 2);
+    for (int addr = 0; addr < 2560; addr += 32) {
+        uint8_t fa[6] = {0x20, 0, (uint8_t)(addr & 0xFF),
+                        (uint8_t)(addr >> 8), 0, 0};
+        cmd_out(c, CMD_SET_FACTORY_SETTINGS_FEATURES, fa, 6);
+        cmd_in(c, CMD_GET_FACTORY_SETTINGS, b64, 64);
+    }
+    uint8_t f15[2] = {0x15, 0};
+    cmd_out(c, CMD_SET_FIRMWARE_INFO_FEATURES, f15, 2);
+    cmd_in(c, CMD_GET_FIRMWARE_INFO, b64, 64);
+    uint8_t im[2] = {8, 0};
+    cmd_out(c, CMD_SET_IMAGE_PROCESSING_MODE, im, 2);
+    uint8_t s1[2] = {1, 0};
+    cmd_out(c, CMD_SET_OPERATION_MODE, s1, 2);
+    return 0;
+}
+
+static void close_cam(skcap_t *c) {
+    uint8_t z2[2] = {0, 0};
+    for (int i = 0; i < 3; i++) cmd_out(c, CMD_SET_OPERATION_MODE, z2, 2);
+    libusb_release_interface(c->h, 0);
+}
+
+static void *worker(void *arg) {
+    skcap_t *c = (skcap_t *)arg;
+    while (!c->quit) {
+        if (!c->h) {
+            c->h = libusb_open_device_with_vid_pid(c->ctx, VID, PID);
+            if (!c->h) {
+                c->connected = 0;
+                struct timespec ts = {1, 0};
+                nanosleep(&ts, NULL);
+                continue;
+            }
+            libusb_detach_kernel_driver(c->h, 0);
+            if (init_cam(c) < 0) {
+                libusb_close(c->h);
+                c->h = NULL;
+                struct timespec ts = {1, 0};
+                nanosleep(&ts, NULL);
+                continue;
+            }
+            c->connected = 1;
+            c->fill = 0;
+            c->req_bytes = 0;
+            c->need_request = 0;
+            sk_denoise_reset(&c->den);
+            if (request_frame(c) == 0) submit_chunk(c);
+        }
+        struct timeval tv = {0, 20 * 1000};
+        int r = libusb_handle_events_timeout_completed(c->ctx, &tv, NULL);
+        if (r == LIBUSB_SUCCESS) pump(c);
+        /* переподключение при гибели устройства/handle */
+        if (c->need_request == -1 || r < 0) {
+            close_cam(c);
+            libusb_close(c->h);
+            c->h = NULL;
+            c->connected = 0;
+            c->need_request = 0;
+            c->fill = 0;
+            c->req_bytes = 0;
+            struct timespec ts = {1, 0};
+            nanosleep(&ts, NULL);
+        }
+    }
+    if (c->h) {
+        for (int i = 0; i < 20; i++) {
+            struct timeval tv = {0, 20 * 1000};
+            libusb_handle_events_timeout_completed(c->ctx, &tv, NULL);
+        }
+        close_cam(c);
+        libusb_close(c->h);
+        c->h = NULL;
+    }
+    return NULL;
+}
+
+skcap_t *skcap_open(skcap_cb cb, void *user, const char *hotmap_path) {
+    skcap_t *c = (skcap_t *)calloc(1, sizeof(skcap_t));
+    if (!c) return NULL;
+    c->cb = cb;
+    c->user = user;
+    pthread_mutex_init(&c->mtx, NULL);
+    c->pal = SK_PAL_IRONBOW;
+    c->smooth = SK_SMOOTH_DEFAULT;
+    c->motion = SK_MOTION_DEFAULT;
+    c->spatial = SK_SPATIAL_DEFAULT;
+    sk_scene_default(&c->scene);
+    sk_planck_default(&c->planck);
+    if (hotmap_path) {
+        FILE *f = fopen(hotmap_path, "rb");
+        if (f) {
+            c->hot = (bool *)malloc((size_t)SK_W * SK_H);
+            if (fread(c->hot, 1, (size_t)SK_W * SK_H, f) !=
+                (size_t)SK_W * SK_H) {
+                free(c->hot);
+                c->hot = NULL;
+            }
+            fclose(f);
+        }
+    }
+    c->asm_buf = (uint8_t *)malloc(2 * (size_t)SK_RAW_BYTES);
+    sk_denoise_init(&c->den, c->smooth, c->motion, c->spatial);
+    sk_tonemap_init(&c->tm, true);
+    sk_palette_lut(c->pal, c->lut);
+    c->t_fps_start = now();
+    if (libusb_init(&c->ctx) < 0) {
+        free(c->asm_buf);
+        pthread_mutex_destroy(&c->mtx);
+        free(c);
+        return NULL;
+    }
+    if (pthread_create(&c->th, NULL, worker, c) != 0) {
+        libusb_exit(c->ctx);
+        free(c->asm_buf);
+        pthread_mutex_destroy(&c->mtx);
+        free(c);
+        return NULL;
+    }
+    return c;
+}
+
+void skcap_close(skcap_t *c) {
+    if (!c) return;
+    c->quit = 1;
+    pthread_join(c->th, NULL);
+    sk_denoise_free(&c->den);
+    free(c->asm_buf);
+    free(c->hot);
+    free(c->ff);
+    libusb_exit(c->ctx);
+    pthread_mutex_destroy(&c->mtx);
+    free(c);
+}
+
+void skcap_set_palette(skcap_t *c, sk_palette_t pal) {
+    if (!c) return;
+    pthread_mutex_lock(&c->mtx);
+    c->pal = pal;
+    sk_palette_lut(pal, c->lut);
+    pthread_mutex_unlock(&c->mtx);
+}
+
+void skcap_set_denoise(skcap_t *c, float smooth, int motion, int spatial,
+                       bool reset) {
+    if (!c) return;
+    pthread_mutex_lock(&c->mtx);
+    c->smooth = smooth;
+    c->motion = motion;
+    c->spatial = spatial;
+    /* рабочий поток применяет денуаз-параметры из den на кадр; меняем поля
+     * под тем же локом, что и чтение в process_frame */
+    c->den.smooth = smooth;
+    c->den.motion = motion;
+    c->den.spatial = spatial;
+    if (reset) c->den_reset = 1;
+    pthread_mutex_unlock(&c->mtx);
+}
+
+void skcap_set_span_manual(skcap_t *c, bool on, double lo, double hi) {
+    if (!c) return;
+    pthread_mutex_lock(&c->mtx);
+    c->span_manual = on;
+    c->man_lo = lo;
+    c->man_hi = hi;
+    pthread_mutex_unlock(&c->mtx);
+}
+
+void skcap_set_scene(skcap_t *c, double eps, double t_refl_c, double t_atm_c,
+                     double distance_m, double rel_humidity) {
+    if (!c) return;
+    pthread_mutex_lock(&c->mtx);
+    c->scene.emissivity = eps;
+    c->scene.t_refl_c = t_refl_c;
+    c->scene.t_atm_c = t_atm_c;
+    c->scene.distance_m = distance_m;
+    c->scene.rel_humidity = rel_humidity;
+    pthread_mutex_unlock(&c->mtx);
+}
+
+int skcap_planck_load(skcap_t *c, const char *path) {
+    if (!c) return (int)SK_ERR_STATE;
+    pthread_mutex_lock(&c->mtx);
+    if (!path) {
+        sk_planck_default(&c->planck);
+        c->planck_set = false;
+        pthread_mutex_unlock(&c->mtx);
+        return 0;
+    }
+    sk_err_t e = sk_planck_load(&c->planck, path);
+    c->planck_set = (e == SK_OK);
+    pthread_mutex_unlock(&c->mtx);
+    return (int)e;
+}
+
+bool skcap_planck_fit(skcap_t *c, double s1, double c1, double s2, double c2) {
+    if (!c) return false;
+    pthread_mutex_lock(&c->mtx);
+    sk_planck_t out;
+    bool ok = sk_planck_fit2(&c->planck, s1, c1, s2, c2, &out);
+    if (ok) {
+        c->planck = out;
+        c->planck_set = true;
+    }
+    pthread_mutex_unlock(&c->mtx);
+    return ok;
+}
+
+sk_err_t skcap_planck_save(skcap_t *c, const char *path) {
+    if (!c) return SK_ERR_STATE;
+    pthread_mutex_lock(&c->mtx);
+    sk_planck_t p = c->planck;
+    pthread_mutex_unlock(&c->mtx);
+    FILE *f = fopen(path, "wb");
+    if (!f) return SK_ERR_IO;
+    fprintf(f, "# SeekIR планк-калибровка (fit по 2 чёрным телам)\n");
+    fprintf(f, "planck_r1 = %.10g\n", p.r1);
+    fprintf(f, "planck_b = %.10g\n", p.b);
+    fprintf(f, "planck_f = %.10g\n", p.f);
+    fprintf(f, "planck_o = %.10g\n", p.o);
+    fprintf(f, "planck_r2 = %.10g\n", p.r2);
+    fclose(f);
+    return SK_OK;
+}
+
+void skcap_planck_get(skcap_t *c, sk_planck_t *out) {
+    if (!c || !out) return;
+    pthread_mutex_lock(&c->mtx);
+    *out = c->planck;
+    pthread_mutex_unlock(&c->mtx);
+}
+
+void skcap_dump_dir(skcap_t *c, const char *dir) {
+    if (!c) return;
+    pthread_mutex_lock(&c->mtx);
+    if (dir) {
+        snprintf(c->dumpdir, sizeof(c->dumpdir), "%s", dir);
+        mkdir(c->dumpdir, 0755);
+    } else {
+        c->dumpdir[0] = 0;
+    }
+    pthread_mutex_unlock(&c->mtx);
+}
+
+void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,
+                 long *resyncs, int *connected) {
+    if (!c) return;
+    if (frames) *frames = c->images;
+    if (ffs) *ffs = c->ffs;
+    if (errors) *errors = c->errors;
+    if (resyncs) *resyncs = c->resyncs;
+    if (connected) *connected = c->connected;
+}

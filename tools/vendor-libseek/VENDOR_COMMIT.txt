@@ -1,0 +1,1 @@
+vendor-libseek-thermal, upstream https://github.com/Bostwickenator/libseek-thermal, commit 2fe3482239c3837591df5c6afdd16861ec7f6911
