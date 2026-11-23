@@ -57,6 +57,11 @@
                 <Separator Width="8" Background="Transparent" />
                 <Button x:Name="BtnHotmap" Content="Карта шума" Width="90" IsEnabled="False" Click="OnHotmap" />
                 <Separator Width="12" Background="Transparent" />
+                <Button x:Name="BtnRec" Content="Запись" Width="70" IsEnabled="False" Click="OnRec" />
+                <TextBlock x:Name="TxtRec" Text="" Width="70" VerticalAlignment="Center"
+                           FontSize="12" FontFamily="Consolas"
+                           Foreground="{DynamicResource CAccentBrush}" />
+                <Separator Width="12" Background="Transparent" />
                 <ComboBox x:Name="CmbPalette" Width="110" Height="22" FontSize="12"
                           ToolTip="палитра" VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
                 <Separator Width="8" Background="Transparent" />
@@ -133,6 +138,14 @@
                     <!-- маркер максимума: перекрестие + подпись, координаты нативные
                          (canvas повёрнут вместе с кадром) -->
                     <Canvas x:Name="Ovl" Width="320" Height="240" IsHitTestVisible="False">
+                        <!-- сетка 3x3 на всём кадре -->
+                        <Line X1="106.667" Y1="0" X2="106.667" Y2="240" Stroke="#404CC2FF" StrokeThickness="0.5"/>
+                        <Line X1="213.333" Y1="0" X2="213.333" Y2="240" Stroke="#404CC2FF" StrokeThickness="0.5"/>
+                        <Line X1="0" Y1="80" X2="320" Y2="80" Stroke="#404CC2FF" StrokeThickness="0.5"/>
+                        <Line X1="0" Y1="160" X2="320" Y2="160" Stroke="#404CC2FF" StrokeThickness="0.5"/>
+                        <!-- акцент границ центрального квадрата (зона первичного замера) -->
+                        <Rectangle Canvas.Left="106.667" Canvas.Top="80" Width="106.667" Height="80"
+                                   Stroke="#664CC2FF" StrokeThickness="0.7" Fill="Transparent"/>
                         <Line x:Name="HLine" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
                         <Line x:Name="VLine" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
                         <Rectangle x:Name="MarkBox" Width="9" Height="9" Stroke="#FF4CC2FF"

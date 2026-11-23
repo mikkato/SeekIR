@@ -57,6 +57,7 @@ public partial class MainWindow : Window
         BtnConnect.IsEnabled = false;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = BtnHotmap.IsEnabled = true;
         BtnExportJpg.IsEnabled = BtnExportPng.IsEnabled = true;
+        BtnRec.IsEnabled = true;
         SldSmooth.IsEnabled = true;
         _denReady = true;
         _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
@@ -88,6 +89,7 @@ public partial class MainWindow : Window
     {
         // снимок берёт raw-сигнал последнего ПОКАЗАННОГО кадра (на паузе — замороженного)
         if (!_frozen) _lastFrame = f;
+        _rec?.Write(f.Rgb); // запись живого потока (нативная ориентация; ffmpeg повернёт)
         Dispatcher.BeginInvoke(() =>
         {
             if (_frozen) return;
@@ -117,12 +119,18 @@ public partial class MainWindow : Window
     }
 
     // ---- живой маркер максимума (F2 hot-spot) ----
-    // Пятно анализа 10x10 px: окно с наибольшим СРЕДНИМ (ищем пятно, не пиксель-
-    // выброс), внутри него — локальный максимум (точный пиксель под перекрестием).
+    // Кадр разбит сеткой 3x3 (нарисована на Ovl). Анализ начинается с
+    // центрального квадрата: первый захват — лучший горячий участок внутри
+    // центра; далее маркер следует за кадром в общем гистерезисе (+0,5 °C).
+    // Внутри выбранной зоны — окно 10x10 с макс. средним, крест ставится на
+    // локальный максимум пикселя внутри окна.
     private int _markIdx = -1;          // позиция перекрестия (индекс 320x240)
     private int _markWinX = -1, _markWinY = -1; // левый верх текущего окна
     private double _markWinMean;        // среднее текущего окна (гистерезис)
-    private const int Win = 10, Margin = 0; // окно 10x10, окна прижимаются к краям (пятно может быть у кромки)
+    private const int Win = 10;         // окно анализа 10x10 px
+    // центральный квадрат сетки 3x3: x 107..212, y 80..159 (включительно)
+    private const int Cx0 = SeekConst.W / 3, Cx1 = SeekConst.W * 2 / 3 - 1;
+    private const int Cy0 = SeekConst.H / 3, Cy1 = SeekConst.H * 2 / 3 - 1;
 
     private readonly double[] _integ = new double[(SeekConst.W + 1) * (SeekConst.H + 1)];
     private void BuildIntegral(double[] t)
@@ -151,17 +159,29 @@ public partial class MainWindow : Window
     {
         var t = f.Temp;
         BuildIntegral(t);
+        // лучшее окно 10x10 по всему кадру
         int bx = -1, by = -1; double bmean = double.MinValue;
-        for (int wy = Margin; wy <= SeekConst.H - Win - Margin; wy++)
-            for (int wx = Margin; wx <= SeekConst.W - Win - Margin; wx++)
+        for (int wy = 0; wy <= SeekConst.H - Win; wy++)
+            for (int wx = 0; wx <= SeekConst.W - Win; wx++)
             {
                 double m = WindowMean(wx, wy);
                 if (m > bmean) { bmean = m; bx = wx; by = wy; }
             }
-        // гистерезис: перескакиваем, только если лучшее окно теплее текущего на 0,5 °C
-        // (оба средних считаем на текущем кадре)
-        if (_markWinX >= 0)
+        if (_markWinX < 0)
         {
+            // старт анализа — из центрального квадрата сетки 3x3
+            bx = -1; by = -1; bmean = double.MinValue;
+            for (int wy = Cy0; wy <= Cy1 - Win + 1; wy++)
+                for (int wx = Cx0; wx <= Cx1 - Win + 1; wx++)
+                {
+                    double m = WindowMean(wx, wy);
+                    if (m > bmean) { bmean = m; bx = wx; by = wy; }
+                }
+        }
+        else
+        {
+            // гистерезис: перескакиваем, только если лучшее окно теплее текущего на 0,5 °C
+            // (оба средних считаем на текущем кадре)
             double curMean = WindowMean(_markWinX, _markWinY);
             if (bmean <= curMean + 0.5) { bx = _markWinX; by = _markWinY; bmean = curMean; }
         }
@@ -270,6 +290,48 @@ public partial class MainWindow : Window
     {
         _frozen = !_frozen;
         BtnFreeze.Content = _frozen ? "Продолжить" : "Пауза";
+    }
+
+    // ---- FW2: запись видео (ffmpeg pipe -> H.264 mp4) ----
+    private FfRecorder? _rec;
+    private System.Windows.Threading.DispatcherTimer? _recTimer;
+
+    private void OnRec(object sender, RoutedEventArgs e)
+    {
+        if (_rec is { IsRunning: true })
+        {
+            BtnRec.IsEnabled = false;
+            string path = "";
+            // остановка кодирования вне UI-потока: mp4 finalize может ждать секунды
+            Task.Run(() =>
+            {
+                path = _rec!.Stop();
+                Dispatcher.BeginInvoke(() =>
+                {
+                    _rec = null; _recTimer?.Stop();
+                    BtnRec.Content = "Запись"; TxtRec.Text = ""; BtnRec.IsEnabled = _cam.IsOpen;
+                    TxtStatus.Text = path.Length > 0 ? $"видео: {path}" : "видео: ошибка кодирования";
+                });
+            });
+            return;
+        }
+        if (_lastFrame is null) return;
+        string dir = _snapDir;
+        Directory.CreateDirectory(dir);
+        string outPath = Path.Combine(dir, $"IR_{DateTime.Now:yyyyMMdd_HHmmss}.mp4");
+        double fps = Math.Clamp(_lastFrame.Fps <= 0 ? 7 : _lastFrame.Fps, 1, 30);
+        _rec = new FfRecorder();
+        if (!_rec.Start(outPath, fps, AppContext.BaseDirectory))
+        {
+            TxtStatus.Text = "ffmpeg.exe не найден рядом с приложением";
+            _rec = null; return;
+        }
+        BtnRec.Content = "Стоп";
+        _recTimer = new System.Windows.Threading.DispatcherTimer
+        { Interval = TimeSpan.FromMilliseconds(500) };
+        _recTimer.Tick += (_, _) => TxtRec.Text = $"{_rec!.Frames / fps:F0} c";
+        _recTimer.Start();
+        TxtStatus.Text = $"запись: {outPath}";
     }
 
     private void OnPalette(object sender, SelectionChangedEventArgs e)
