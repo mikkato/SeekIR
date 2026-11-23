@@ -65,6 +65,9 @@
                 <Button x:Name="BtnScene" Content="Сцена…" Width="64" Click="OnScene"
                         ToolTip="ε материала, отражённая температура, воздух, дистанция" />
                 <Separator Width="12" Background="Transparent" />
+                <Button x:Name="BtnCalib" Content="Калибровка…" Width="92" IsEnabled="False" Click="OnCalib"
+                        ToolTip="планк-калибровка по 2 опорным точкам под управлением LLM" />
+                <Separator Width="12" Background="Transparent" />
                 <Button x:Name="BtnReport" Content="Отчёт…" Width="64" IsEnabled="False" Click="OnReport"
                         ToolTip="LLM-интервью по кадру и PDF-отчёт" />
                 <Separator Width="12" Background="Transparent" />
@@ -184,6 +187,13 @@
                     </Canvas>
                 </Grid>
             </Viewbox>
+            <!-- указания LLM-калибровки поверх кадра (экранные координаты) -->
+            <Border x:Name="CalibBanner" Background="#CC000000" BorderBrush="#FFFF7842"
+                    BorderThickness="1" Padding="6,3" Margin="16" HorizontalAlignment="Left"
+                    VerticalAlignment="Top" MaxWidth="360" Visibility="Collapsed">
+                <TextBlock x:Name="CalibTxt" Text="" FontSize="12" TextWrapping="Wrap"
+                           Foreground="#FFFFD7A8" />
+            </Border>
         </Grid>
     </DockPanel>
 </Window>

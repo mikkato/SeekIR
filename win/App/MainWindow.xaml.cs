@@ -60,6 +60,7 @@ public partial class MainWindow : Window
         BtnExportJpg.IsEnabled = BtnExportPng.IsEnabled = true;
         BtnRec.IsEnabled = true;
         BtnReport.IsEnabled = true;
+        BtnCalib.IsEnabled = true;
         SldSmooth.IsEnabled = true;
         _denReady = true;
         _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
@@ -106,6 +107,68 @@ public partial class MainWindow : Window
             $"T_refl={(s.TReflEqualsAir ? s.TAtmC : s.TReflC):0.0} °C; " +
             $"дистанция {s.DistanceM:0.0} м; RH {s.RelHumidity:0} %";
         new ReportWindow(new LlmClient(_cfg.Llm), png, facts) { Owner = this }.Show();
+    }
+
+    // ---- калибровка под управлением LLM ----
+    private CalibrationWindow? _calibWin;
+    private readonly Queue<double> _centerHist = new(); // T центра, окно ~40 кадров (~6 c)
+
+    private void OnCalib(object sender, RoutedEventArgs e)
+    {
+        if (_calibWin is { IsLoaded: true }) { _calibWin.Activate(); return; }
+        _calibWin = new CalibrationWindow(this, new LlmClient(_cfg.Llm)) { Owner = this };
+        _calibWin.Show();
+    }
+
+    /// <summary>Баннер указаний модели поверх кадра (пустая строка — спрятать).</summary>
+    public void SetCalibHint(string hint)
+    {
+        if (string.IsNullOrWhiteSpace(hint))
+        {
+            CalibBanner.Visibility = Visibility.Collapsed;
+            return;
+        }
+        CalibTxt.Text = hint;
+        CalibBanner.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Снимок для калибровщика: PNG повёрнутого кадра + телеметрия +
+    /// среднее по центру 10x10 (сигнал/температура) + признак стабилизации.</summary>
+    public CalibrationWindow.Snap CalibSnapshot()
+    {
+        var f = _lastFrame ?? throw new InvalidOperationException("нет кадра");
+        byte[] png = _bmp is null ? [] : Exports.Png(Exports.Rotated(_bmp));
+        double sig = 0, t = 0; int n = 0;
+        for (int ry = MidY - 5; ry < MidY + 5; ry++)
+            for (int rx = MidX - 5; rx < MidX + 5; rx++)
+            {
+                int i = ry * SeekConst.W + rx;
+                sig += f.Signal[i]; t += f.Temp[i]; n++;
+            }
+        sig /= n; t /= n;
+        // стабилизация: разброс T центра за ~40 кадров < 0.4 °C
+        lock (_centerHist)
+        {
+            _centerHist.Enqueue(t);
+            while (_centerHist.Count > 40) _centerHist.Dequeue();
+        }
+        bool stable = _centerHist.Count >= 15 && _centerHist.Max() - _centerHist.Min() < 0.4;
+        var s = _cfg.Scene;
+        string facts =
+            $"span {f.Lo:F0}..{f.Hi:F0} отсч.; fps {f.Fps:F1}\n" +
+            $"ε={s.Emissivity:0.00} ({s.Material}); T_возд={s.TAtmC:0.0} °C; " +
+            $"T_refl={(s.TReflEqualsAir ? s.TAtmC : s.TReflC):0.0} °C; RH {s.RelHumidity:0} %";
+        return new CalibrationWindow.Snap(png, facts, sig, t, stable);
+    }
+
+    /// <summary>Планк-фит по 2 точкам + сохранение planck.calib. null = успех.</summary>
+    public string? CalibFit(double s1, double c1, double s2, double c2)
+    {
+        if (Math.Abs(c2 - c1) < 8) return "опорные температуры должны различаться минимум на ~10 °C";
+        if (!_cam.PlanckFit(s1, c1, s2, c2)) return "точки вырождены — сигнал/температуры не дали решения";
+        try { _cam.PlanckSave(Path.Combine(AppConfig.Dir, "planck.calib")); }
+        catch (Exception ex) { return "фит применён, но сохранение не удалось: " + ex.Message; }
+        return null;
     }
 
     // ---- тема ----
