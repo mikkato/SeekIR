@@ -45,21 +45,34 @@ public partial class ReportWindow : Window
         ChatScroll.ScrollToEnd();
     }
 
+    /// <summary>Системная роль: эксперт по температурному контролю.</summary>
+    public const string SystemPrompt =
+        "Ты — эксперт по температурному контролю и инфракрасной термографии с опытом " +
+        "энергоаудитов и диагностики промышленного оборудования (ГОСТ Р 55472, серия ISO 6781). " +
+        "Ты работаешь с термограммой тепловизора Seek CompactPRO (320x240, палитра ironbow: " +
+        "холодное — фиолетово-синее, горячее — жёлто-белое) и радиометрической телеметрией съёмки. " +
+        "Правила: опирайся только на видимые тепловые зоны и переданные числа; не выдумывай " +
+        "температуры, которых нет в кадре; помни, что абсолютные значения могут иметь смещение " +
+        "до ±5 °C без калибровки по чёрному телу, а низкая эмиссивность блестящих поверхностей " +
+        "искажает замер; различай собственный нагрев объекта и отражённое излучение. " +
+        "Формулируй выводы как специалист: зона, характер (штатный/аномальный), вероятная причина, " +
+        "риск, рекомендация. Отвечай по-русски, без markdown, кратко и по делу.";
+
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (!_llm.Enabled) return;
         BtnSend.IsEnabled = false;
         try
         {
-            string sys =
-                "Ты — инженер-тепловизор. Пользователь прислал термограмму (палитра ironbow) и телеметрию. " +
-                "Дай краткое заключение по изображению (что горячее/холоднее, аномалии, границы), " +
-                "затем задай ОДИН уточняющий вопрос для отчёта (объект съёмки, цель, что проверить). " +
-                "Пиши по-русски, без markdown.";
-            string prompt = sys + "\n\nТелеметрия: " + _facts +
+            string task =
+                "Пользователь прислал термограмму и телеметрию. Дай краткое заключение по изображению " +
+                "(что горячее/холоднее, аномалии, границы зон), затем задай ОДИН уточняющий вопрос " +
+                "для отчёта (объект съёмки, цель, что проверить).";
+            string prompt = task + "\n\nТелеметрия: " + _facts +
                 "\nВсе температуры на изображении могут иметь систематическое смещение (без калибровки по чёрному телу ±5 °C).";
+            _hist.Add(new LlmClient.Msg("system", SystemPrompt));
             _hist.Add(new LlmClient.Msg("user", prompt));
-            string a = await Task.Run(() => _llm.AskImageAsync(prompt, _png));
+            string a = await Task.Run(() => _llm.ChatAsync(_hist, prompt, _png));
             _hist.Add(new LlmClient.Msg("assistant", a));
             Append("Агент", a);
         }
@@ -100,7 +113,7 @@ public partial class ReportWindow : Window
             var pairs = new List<(string Q, string A)>();
             for (int i = 0; i < _hist.Count - 1; i++)
                 if (_hist[i].Role == "assistant" && _hist[i + 1].Role == "user" &&
-                    !_hist[i + 1].Text.StartsWith("Ты — инженер"))
+                    !_hist[i + 1].Text.StartsWith("Пользователь прислал термограмму"))
                     pairs.Add((TailQuestion(_hist[i].Text), _hist[i + 1].Text));
             string conclusion = _hist.LastOrDefault(m => m.Role == "assistant")?.Text ?? "";
             byte[] png = _png;

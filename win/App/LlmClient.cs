@@ -24,20 +24,19 @@ public sealed class LlmClient
     private string Url => _cfg.BaseUrl.TrimEnd('/') + "/chat/completions";
 
     public async Task<string> ChatAsync(IEnumerable<Msg> msgs, CancellationToken ct = default)
-        => await SendAsync(BuildBody(msgs, null), ct);
+        => await SendAsync(BuildBody(msgs, null, null), ct);
 
-    /// <summary>Вопрос по термограмме: png — визуализированный кадр.</summary>
-    public async Task<string> AskImageAsync(string prompt, byte[] png, CancellationToken ct = default)
-        => await SendAsync(BuildBody([new Msg("user", "")], prompt, png), ct);
+    /// <summary>История + изображение: png прицепляется к сообщению с текстом imgPrompt.</summary>
+    public async Task<string> ChatAsync(IEnumerable<Msg> msgs, string imgPrompt, byte[] png, CancellationToken ct = default)
+        => await SendAsync(BuildBody(msgs, imgPrompt, png), ct);
 
-    private JsonElement BuildBody(IEnumerable<Msg> msgs, string? imgPrompt, byte[]? png = null)
+    private JsonElement BuildBody(IEnumerable<Msg> msgs, string? imgPrompt, byte[]? png)
     {
         var arr = new List<object>();
-        bool first = true;
         foreach (var m in msgs)
         {
             object content = m.Text;
-            if (first && png is not null && imgPrompt is not null)
+            if (png is not null && imgPrompt is not null && m.Role == "user" && m.Text == imgPrompt)
             {
                 content = new object[]
                 {
@@ -47,7 +46,6 @@ public sealed class LlmClient
                 };
             }
             arr.Add(new { role = m.Role, content });
-            first = false;
         }
         var body = new Dictionary<string, object>
         {
