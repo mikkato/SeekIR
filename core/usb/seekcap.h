@@ -57,6 +57,11 @@ void skcap_planck_get(skcap_t *c, sk_planck_t *out);
 /* Золотые дампы img/ff_NNNN.raw в dir (NULL = выключить). */
 void skcap_dump_dir(skcap_t *c, const char *dir);
 
+/* Дополнительный канал FF-кадров для построения карты шума: колбэк
+ * вызывается из рабочего потока в момент прихода FF (signal = ROI FF u16,
+ * rgb/temp не валидны). NULL = выключить. */
+void skcap_set_ff_cb(skcap_t *c, skcap_cb cb, void *user);
+
 /* Диагностика для UI. */
 void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,
                  long *resyncs, int *connected);

@@ -10,7 +10,7 @@ namespace SeekIRWin.App;
 
 public partial class MainWindow : Window
 {
-    private readonly SeekCam _cam = new();
+    private SeekCam _cam = new();
     private WriteableBitmap? _bmp;
     private WriteableBitmap? _palBmp;
     private bool _frozen;
@@ -33,6 +33,29 @@ public partial class MainWindow : Window
         BuildPaletteStrip(0);
         _cam.FrameArrived += OnFrame; // поток libusb-воркера
         Closed += (_, _) => _cam.Dispose();
+        // автоподключение: тепловизор — основное устройство; ретрай 2 с, пока открыто окно
+        Loaded += (_, _) => { TryConnect(); StartRetryTimer(); };
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _retry;
+    private void StartRetryTimer()
+    {
+        if (_cam.IsOpen) return;
+        _retry = new System.Windows.Threading.DispatcherTimer
+        { Interval = TimeSpan.FromSeconds(2) };
+        _retry.Tick += (_, _) => TryConnect();
+        _retry.Start();
+    }
+
+    private void TryConnect()
+    {
+        if (_cam.IsOpen) { _retry?.Stop(); return; }
+        string? hot = ResolveHotmap();
+        if (!_cam.Open(hot)) return;
+        _retry?.Stop();
+        BtnConnect.IsEnabled = false;
+        BtnFreeze.IsEnabled = BtnSnap.IsEnabled = BtnHotmap.IsEnabled = true;
+        TxtStatus.Text = "подключение…";
     }
 
     // ---- тема ----
@@ -44,23 +67,14 @@ public partial class MainWindow : Window
     }
 
     // ---- камера ----
-    private void OnConnect(object sender, RoutedEventArgs e)
-    {
-        if (_cam.IsOpen) return;
-        string? hot = ResolveHotmap();
-        if (!_cam.Open(hot))
-        {
-            TxtStatus.Text = "камера не найдена (WinUSB? плот в прямом порту?)";
-            return;
-        }
-        BtnConnect.IsEnabled = false;
-        BtnFreeze.IsEnabled = BtnSnap.IsEnabled = true;
-        TxtStatus.Text = "подключение…";
-    }
+    private void OnConnect(object sender, RoutedEventArgs e) => TryConnect();
 
     private static string? ResolveHotmap()
     {
-        // hot.bin кладём рядом с exe (из core/tests/hot.bin)
+        // приоритет: пользовательская карта (%APPDATA%\SeekIRWin\hot.bin),
+        // иначе эталонная рядом с exe
+        string user = HotmapPath();
+        if (File.Exists(user)) return user;
         string p = Path.Combine(AppContext.BaseDirectory, "hot.bin");
         return File.Exists(p) ? p : null;
     }
@@ -178,5 +192,49 @@ public partial class MainWindow : Window
         using var fs = File.Create(Path.Combine(_snapDir, name));
         enc.Save(fs);
         TxtStatus.Text = $"снимок: {name}";
+    }
+
+    // ---- карта шума: 60 авто-FF -> HotmapBuilder -> hot.bin -> перезапуск потока ----
+    private HotmapBuilder? _hm;
+    private void OnHotmap(object sender, RoutedEventArgs e)
+    {
+        if (_hm is not null || !_cam.IsOpen) return;
+        _hm = new HotmapBuilder(60);
+        BtnHotmap.IsEnabled = false;
+        _cam.SetFfCallback(sig =>
+        {
+            var b = _hm;
+            if (b is null) return;
+            b.AddFf(sig);
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (!b.IsDone) { TxtStatus.Text = $"карта шума: FF {b.Collected}/60 — не двигайте камеру"; return; }
+                string path = HotmapPath();
+                b.Save(path);
+                _cam.SetFfCallback(null);
+                _hm = null;
+                RestartWithHotmap(path);
+                TxtStatus.Text = $"карта шума: {b.Summary} — применена";
+            });
+        });
+    }
+
+    private static string HotmapPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                     "SeekIRWin", "hot.bin");
+
+    private void RestartWithHotmap(string hotpath)
+    {
+        // ядро читает карту при open — мягкий перезапуск потока
+        _cam.Dispose();
+        _bmp = null; Img.Source = null;
+        _cam = new SeekCam();
+        _cam.FrameArrived += OnFrame;
+        bool ok = _cam.Open(File.Exists(hotpath) ? hotpath : ResolveHotmap());
+        BtnHotmap.IsEnabled = ok;
+        BtnFreeze.IsEnabled = BtnSnap.IsEnabled = ok;
+        BtnConnect.IsEnabled = !ok;
+        if (!ok) StartRetryTimer();
+        if (!ok) TxtStatus.Text = "камера не вернулась после перезапуска (пероткните USB)";
     }
 }

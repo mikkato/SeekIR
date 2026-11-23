@@ -50,6 +50,8 @@
                 <Button x:Name="BtnFreeze" Content="Пауза" Width="60" IsEnabled="False" Click="OnFreeze" />
                 <Separator Width="8" Background="Transparent" />
                 <Button x:Name="BtnSnap" Content="Снимок" Width="70" IsEnabled="False" Click="OnSnap" />
+                <Separator Width="8" Background="Transparent" />
+                <Button x:Name="BtnHotmap" Content="Карта шума" Width="90" IsEnabled="False" Click="OnHotmap" />
                 <Separator Width="12" Background="Transparent" />
                 <TextBlock Text="палитра" Margin="6,0,4,0" VerticalAlignment="Center"
                            Foreground="{DynamicResource CFgDimBrush}" FontSize="12" />

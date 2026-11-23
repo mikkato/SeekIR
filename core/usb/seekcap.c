@@ -35,6 +35,8 @@ struct skcap {
     /* внешний API */
     skcap_cb cb;
     void *user;
+    skcap_cb ff_cb;    /* доп. канал FF-кадров (карта шума), необязательный */
+    void *ff_user;
     bool *hot;
 
     pthread_t th;
@@ -119,6 +121,18 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
         if (!c->ff) c->ff = (uint16_t *)malloc(SK_RAW_BYTES);
         if (c->ff) memcpy(c->ff, raw, SK_RAW_BYTES);
         c->ffs++;
+        /* доп. доставка FF-ROI для построения карты шума (win/HotmapBuilder);
+         * канал опциональный, macOS-Swift им не пользуется */
+        if (c->ff_cb) {
+            static uint16_t ffroi[SK_W * SK_H];
+            for (int y = 0; y < SK_H; y++)
+                for (int x = 0; x < SK_W; x++)
+                    ffroi[y * SK_W + x] = raw[(y + SK_ROI_Y) * SK_RAW_W + (x + SK_ROI_X)];
+            skcap_frame_t f = {0};
+            f.rgb = c->rgb; f.temp = c->temp; f.signal = ffroi;
+            f.ffs = c->ffs;
+            c->ff_cb(c->ff_user, &f);
+        }
         return;
     }
     if (fid != SK_FID_IMAGE || !c->ff) return;
@@ -571,6 +585,12 @@ void skcap_dump_dir(skcap_t *c, const char *dir) {
         c->dumpdir[0] = 0;
     }
     pthread_mutex_unlock(&c->mtx);
+}
+
+void skcap_set_ff_cb(skcap_t *c, skcap_cb cb, void *user) {
+    if (!c) return;
+    c->ff_cb = cb; /* пишется одинжды до/после open; чтение только в pump */
+    c->ff_user = user;
 }
 
 void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,

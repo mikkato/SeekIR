@@ -57,6 +57,9 @@ public static partial class Native
     [LibraryImport(Lib, EntryPoint = "skcap_dump_dir")]
     public static partial void DumpDir(IntPtr c, byte[]? dirUtf8);
 
+    [LibraryImport(Lib, EntryPoint = "skcap_set_ff_cb")]
+    public static partial void SetFfCb(IntPtr c, SkcapCallback cb, IntPtr user);
+
     [LibraryImport(Lib, EntryPoint = "skcap_stats")]
     public static partial void Stats(IntPtr c, out int frames, out int ffs, out int errors, out int resyncs, out int connected);
 

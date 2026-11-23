@@ -33,4 +33,5 @@ EXPORTS
     skcap_set_palette
     skcap_set_scene
     skcap_set_span_manual
+    skcap_set_ff_cb
     skcap_stats

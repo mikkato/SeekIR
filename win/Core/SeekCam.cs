@@ -50,6 +50,22 @@ public sealed class SeekCam : IDisposable
     public void SetScene(double eps, double tRefl, double tAtm, double dist, double rh) =>
         Native.SetScene(_h, eps, tRefl, tAtm, dist, rh);
     public void SetDumpDir(string? dir) => Native.DumpDir(_h, Native.Utf8Z(dir));
+
+    /// <summary>Канал FF-кадров (для HotmapBuilder). null = выключить.
+    /// ВАЖНО: в этом колбэке валидно только поле Signal (ROI FF), rgb/temp — нет.</summary>
+    public void SetFfCallback(Action<ushort[]>? onFf)
+    {
+        if (onFf is null) { Native.SetFfCb(_h, null!, IntPtr.Zero); _ffKeep = null; return; }
+        _ffKeep = (user, framePtr) =>
+        {
+            var f = Marshal.PtrToStructure<SkcapFrame>(framePtr);
+            var sig = new ushort[SeekConst.W * SeekConst.H];
+            unsafe { fixed (ushort* d = sig) Buffer.MemoryCopy((void*)f.Signal, d, sig.Length * 2, sig.Length * 2); }
+            onFf(sig);
+        };
+        Native.SetFfCb(_h, _ffKeep, IntPtr.Zero);
+    }
+    private SkcapCallback? _ffKeep;
     public (int frames, int ffs, int errors, int resyncs, int connected) Stats()
     { Native.Stats(_h, out var a, out var b, out var c, out var d, out var e); return (a, b, c, d, e); }
 
