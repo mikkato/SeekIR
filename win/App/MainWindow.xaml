@@ -133,8 +133,8 @@
                     <!-- маркер максимума: перекрестие + подпись, координаты нативные
                          (canvas повёрнут вместе с кадром) -->
                     <Canvas x:Name="Ovl" Width="320" Height="240" IsHitTestVisible="False">
-                        <Line x:Name="HLine" Stroke="#FF4CC2FF" StrokeThickness="0.5" Y2="0"/>
-                        <Line x:Name="VLine" Stroke="#FF4CC2FF" StrokeThickness="0.5" X2="0"/>
+                        <Line x:Name="HLine" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
+                        <Line x:Name="VLine" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
                         <Rectangle x:Name="MarkBox" Width="9" Height="9" Stroke="#FF4CC2FF"
                                    StrokeThickness="0.7" Fill="Transparent"/>
                         <Border x:Name="MarkTag" Background="#CC000000" BorderBrush="#FF4CC2FF"

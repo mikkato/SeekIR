@@ -133,9 +133,12 @@ public partial class MainWindow : Window
         }
         int x = _markIdx % SeekConst.W, y = _markIdx / SeekConst.W;
         double tm = t[_markIdx];
-        // перекрестие: линии на всю рамку + бокс + подпись
-        Canvas.SetLeft(HLine, 0); Canvas.SetTop(HLine, y); HLine.X1 = 0; HLine.X2 = SeekConst.W;
-        Canvas.SetLeft(VLine, x); Canvas.SetTop(VLine, 0); VLine.Y1 = 0; VLine.Y2 = SeekConst.H;
+        // компактное перекрестие: короткие штрихи сквозь центр, центр закрыт боксом
+        const double arm = 9;   // длина луча от центра
+        HLine.X1 = x - arm; HLine.X2 = x + arm; HLine.Y1 = y; HLine.Y2 = y;
+        VLine.X1 = x; VLine.X2 = x; VLine.Y1 = y - arm; VLine.Y2 = y + arm;
+        Canvas.SetLeft(HLine, 0); Canvas.SetTop(HLine, 0);
+        Canvas.SetLeft(VLine, 0); Canvas.SetTop(VLine, 0);
         Canvas.SetLeft(MarkBox, x - 4.5); Canvas.SetTop(MarkBox, y - 4.5);
         MarkTxt.Text = $"{tm:F1} \u00b0C";
         double tx = x + 7, ty = y - 9;
