@@ -196,7 +196,7 @@ public partial class MainWindow : Window
     {
         // снимок берёт raw-сигнал последнего ПОКАЗАННОГО кадра (на паузе — замороженного)
         if (!_frozen) _lastFrame = f;
-        _rec?.Write(f.Rgb); // запись живого потока (нативная ориентация; ffmpeg повернёт)
+        _rec?.Write(f.Rgb, f.Signal); // запись живого потока (нативная ориентация; ffmpeg повернёт)
         Dispatcher.BeginInvoke(() =>
         {
             if (_frozen) return;
@@ -406,6 +406,8 @@ public partial class MainWindow : Window
     // ---- FW2: запись видео (ffmpeg pipe -> H.264 mp4) ----
     private FfRecorder? _rec;
     private System.Windows.Threading.DispatcherTimer? _recTimer;
+    private SnapshotMeta? _recMeta;
+    private string _recDir = "", _recBase = "";
 
     private void OnRec(object sender, RoutedEventArgs e)
     {
@@ -421,6 +423,17 @@ public partial class MainWindow : Window
                 {
                     _rec = null; _recTimer?.Stop();
                     BtnRec.Content = "Запись"; TxtRec.Text = ""; BtnRec.IsEnabled = _cam.IsOpen;
+                    if (path.Length > 0 && _recMeta is not null)
+                    {
+                        try
+                        {
+                            File.WriteAllText(Path.Combine(_recDir, _recBase + ".meta.json"),
+                                System.Text.Json.JsonSerializer.Serialize(_recMeta,
+                                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                        }
+                        catch { }
+                        _recMeta = null;
+                    }
                     TxtStatus.Text = path.Length > 0 ? $"видео: {path}" : "видео: ошибка кодирования";
                 });
             });
@@ -429,14 +442,40 @@ public partial class MainWindow : Window
         if (_lastFrame is null) return;
         string dir = _snapDir;
         Directory.CreateDirectory(dir);
-        string outPath = Path.Combine(dir, $"IR_{DateTime.Now:yyyyMMdd_HHmmss}.mp4");
+        // FW2: лимит по свободному месту (<1 ГБ — не начинать)
+        try
+        {
+            var drive = new DriveInfo(Path.GetPathRoot(dir)!);
+            if (drive.AvailableFreeSpace < 1L << 30)
+            { TxtStatus.Text = "запись: свободно < 1 ГБ — освободите место"; return; }
+        }
+        catch { }
+        string baseName = $"IR_{DateTime.Now:yyyyMMdd_HHmmss}";
+        string outPath = Path.Combine(dir, baseName + ".mp4");
         double fps = Math.Clamp(_lastFrame.Fps <= 0 ? 7 : _lastFrame.Fps, 1, 30);
         _rec = new FfRecorder();
-        if (!_rec.Start(outPath, fps, AppContext.BaseDirectory))
+        // sidecar радиоданных FW2: raw-сигнал LE + meta (как у снимка)
+        string sidecar = Path.Combine(dir, baseName + ".sig16");
+        if (!_rec.Start(outPath, fps, AppContext.BaseDirectory, sidecar))
         {
             TxtStatus.Text = "ffmpeg.exe не найден рядом с приложением";
             _rec = null; return;
         }
+        _recMeta = new SnapshotMeta
+        {
+            Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+            Palette = CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "ironbow",
+            SpanLo = _lastFrame.Lo, SpanHi = _lastFrame.Hi, SpanAuto = ChkAutoSpan.IsChecked == true,
+            Fps = fps, CenterCelsius = _lastFrame.Temp[SeekConst.W * SeekConst.H / 2],
+            MeanSignal = _lastFrame.MeanSignal,
+            Smooth = (float)SldSmooth.Value, Motion = SeekConst.Motion, Spatial = SeekConst.Spatial,
+            Hotmap = ResolveHotmap() ?? "",
+            Emissivity = _cfg.Scene.Emissivity,
+            TReflC = _cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC,
+            TAtmC = _cfg.Scene.TAtmC, DistanceM = _cfg.Scene.DistanceM,
+            RelHumidity = _cfg.Scene.RelHumidity,
+        };
+        _recDir = dir; _recBase = baseName;
         BtnRec.Content = "Стоп";
         _recTimer = new System.Windows.Threading.DispatcherTimer
         { Interval = TimeSpan.FromMilliseconds(500) };
@@ -469,6 +508,10 @@ public partial class MainWindow : Window
             MeanSignal = f.MeanSignal,
             Smooth = (float)SldSmooth.Value, Motion = SeekConst.Motion, Spatial = SeekConst.Spatial,
             Hotmap = ResolveHotmap() ?? "",
+            Emissivity = _cfg.Scene.Emissivity,
+            TReflC = _cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC,
+            TAtmC = _cfg.Scene.TAtmC, DistanceM = _cfg.Scene.DistanceM,
+            RelHumidity = _cfg.Scene.RelHumidity,
         };
         string dir = Gallery.Save(name, f.Signal, Exports.Png(_bmp), meta);
         TxtStatus.Text = $"снимок: {Path.GetFileName(dir)} (raw+png+meta)";

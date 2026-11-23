@@ -40,7 +40,11 @@ public sealed class AppConfig
         try
         {
             if (File.Exists(PathJson))
-                return JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(PathJson)) ?? new();
+            {
+                var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(PathJson)) ?? new();
+                cfg.Llm.ApiKey = Unprotect(cfg.Llm.ApiKey);
+                return cfg;
+            }
         }
         catch { /* битый конфиг = дефолт */ }
         return new AppConfig();
@@ -49,7 +53,37 @@ public sealed class AppConfig
     public void Save()
     {
         Directory.CreateDirectory(Dir);
+        var copy = JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(this))!;
+        copy.Llm.ApiKey = Protect(copy.Llm.ApiKey);
         File.WriteAllText(PathJson,
-            JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            JsonSerializer.Serialize(copy, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    // FW3: API-ключ в config.json хранится в DPAPI (Currentuser), префикс "dpapi:".
+    // Ручной правкой открытого текста тоже можно пользоваться (без префикса).
+    private const string DpapiPrefix = "dpapi:";
+    private static string Protect(string plain)
+    {
+        if (plain.Length == 0 || plain.StartsWith(DpapiPrefix)) return plain;
+        try
+        {
+            var b = System.Security.Cryptography.ProtectedData.Protect(
+                System.Text.Encoding.UTF8.GetBytes(plain), null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            return DpapiPrefix + Convert.ToBase64String(b);
+        }
+        catch { return plain; }
+    }
+    private static string Unprotect(string stored)
+    {
+        if (!stored.StartsWith(DpapiPrefix)) return stored;
+        try
+        {
+            var b = System.Security.Cryptography.ProtectedData.Unprotect(
+                Convert.FromBase64String(stored[DpapiPrefix.Length..]), null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            return System.Text.Encoding.UTF8.GetString(b);
+        }
+        catch { return ""; }
     }
 }

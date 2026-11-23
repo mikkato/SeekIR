@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
@@ -12,18 +13,20 @@ namespace SeekIRWin.App;
 /// отдельный поток пишет в stdin.</summary>
 public sealed class FfRecorder : IDisposable
 {
-    private readonly BlockingCollection<byte[]> _q = new(120); // ~20 c буфер
+    private readonly BlockingCollection<(byte[] Rgb, ushort[]? Sig)> _q = new(120); // ~20 c буфер
     private Process? _ff;
     private Stream? _stdin;
     private Thread? _writer;
     private string _path = "";
+    private BinaryWriter? _raw; // FW2 sidecar: сырой 16-битный сигнал, тот же порядок кадров
     private long _frames;
     private volatile bool _done; // Write() после Stop/Dispose не трогаем
 
     public bool IsRunning => !_done && _ff is { HasExited: false };
     public long Frames => Interlocked.Read(ref _frames);
 
-    public bool Start(string outPath, double fps, string exeDir)
+    /// <summary>sidecarPath — необязательный .sig16 (LE ushort по кадрам, 320x240).</summary>
+    public bool Start(string outPath, double fps, string exeDir, string? sidecarPath = null)
     {
         if (IsRunning) return false;
         string ff = Path.Combine(exeDir, "ffmpeg.exe");
@@ -49,6 +52,11 @@ public sealed class FfRecorder : IDisposable
             },
         };
         try { _ff.Start(); } catch { Dispose(); return false; }
+        if (sidecarPath is not null)
+        {
+            try { _raw = new BinaryWriter(File.Create(sidecarPath)); }
+            catch { _raw = null; }
+        }
         _stdin = _ff.StandardInput.BaseStream;
         _ = _ff.StandardError.ReadToEndAsync(); // drain, не блокировать stderr
         _writer = new Thread(Pump) { IsBackground = true, Name = "ffrec" };
@@ -56,8 +64,9 @@ public sealed class FfRecorder : IDisposable
         return true;
     }
 
-    /// <summary>Вызывается из потока кадров. Копия RGB888 в очередь; переполнение — сброс кадра.</summary>
-    public void Write(byte[] rgb888)
+    /// <summary>Вызывается из потока кадров. Копия RGB888 (+signal, если sidecar)
+    /// в очередь; переполнение — сброс кадра.</summary>
+    public void Write(byte[] rgb888, ushort[]? signal = null)
     {
         if (_done) return;
         try
@@ -65,7 +74,7 @@ public sealed class FfRecorder : IDisposable
             if (!IsRunning) return;
             var copy = new byte[rgb888.Length];
             Buffer.BlockCopy(rgb888, 0, copy, 0, rgb888.Length);
-            if (!_q.TryAdd(copy, 50)) return;
+            if (!_q.TryAdd((copy, _raw is null ? null : signal), 50)) return;
         }
         catch { /* остановка в этот момент — кадр просто теряется */ }
     }
@@ -74,9 +83,18 @@ public sealed class FfRecorder : IDisposable
     {
         try
         {
-            foreach (var f in _q.GetConsumingEnumerable())
+            foreach (var (rgb, sig) in _q.GetConsumingEnumerable())
             {
-                _stdin!.Write(f, 0, f.Length);
+                _stdin!.Write(rgb, 0, rgb.Length);
+                if (sig is not null && _raw is not null)
+                {
+                    Span<byte> b = stackalloc byte[2];
+                    foreach (ushort v in sig)
+                    {
+                        BinaryPrimitives.WriteUInt16LittleEndian(b, v);
+                        _raw.Write(b);
+                    }
+                }
                 Interlocked.Increment(ref _frames);
             }
         }
@@ -108,6 +126,8 @@ public sealed class FfRecorder : IDisposable
         _done = true;
         try { if (_ff is { HasExited: false }) _ff.Kill(entireProcessTree: true); } catch { }
         _ff?.Dispose(); _ff = null; _stdin = null;
+        try { _raw?.Flush(); _raw?.Dispose(); } catch { }
+        _raw = null;
         _q.Dispose();
     }
 }
