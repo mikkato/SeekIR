@@ -59,6 +59,7 @@ public partial class MainWindow : Window
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = BtnHotmap.IsEnabled = true;
         BtnExportJpg.IsEnabled = BtnExportPng.IsEnabled = true;
         BtnRec.IsEnabled = true;
+        BtnReport.IsEnabled = true;
         SldSmooth.IsEnabled = true;
         _denReady = true;
         _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
@@ -77,7 +78,7 @@ public partial class MainWindow : Window
         _cam.SetScene(s.Emissivity, tRefl, s.TAtmC, s.DistanceM, s.RelHumidity);
     }
 
-    // ---- сцена (радиометрия) ----
+    // ---- сцена (радиометрии) ----
     private void OnScene(object sender, RoutedEventArgs e)
     {
         var w = new SceneWindow(_cfg) { Owner = this };
@@ -88,6 +89,23 @@ public partial class MainWindow : Window
                              $"T_refl={(_cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC):0.0} °C, " +
                              $"{_cfg.Scene.DistanceM:0.0} м";
         }
+    }
+
+    // ---- LLM-интервью / отчёт (F4/F5) ----
+    private void OnReport(object sender, RoutedEventArgs e)
+    {
+        if (_bmp is null || _lastFrame is null) return;
+        byte[] png = Exports.Png(Exports.Rotated(_bmp));
+        var f = _lastFrame;
+        var s = _cfg.Scene;
+        int mid = SeekConst.W * SeekConst.H / 2;
+        string facts =
+            $"Палитра: {(CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "?")}; " +
+            $"span {f.Lo:F0}..{f.Hi:F0} отсч.; центр кадра {f.Temp[mid]:F1} °C\n" +
+            $"ε={s.Emissivity:0.00} ({s.Material}); T_возд={s.TAtmC:0.0} °C; " +
+            $"T_refl={(s.TReflEqualsAir ? s.TAtmC : s.TReflC):0.0} °C; " +
+            $"дистанция {s.DistanceM:0.0} м; RH {s.RelHumidity:0} %";
+        new ReportWindow(new LlmClient(_cfg.Llm), png, facts) { Owner = this }.Show();
     }
 
     // ---- тема ----
