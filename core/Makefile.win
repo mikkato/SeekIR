@@ -1,0 +1,71 @@
+# Makefile.win — mingw-w64 ucrt64 (D:\LSDF\toolchains\msys2\ucrt64).
+# Сборка: из git-bash:  make -f Makefile.win [all usb dll seekd test dist]
+#   all   — статические либы + seekproc.exe (golden-тест)
+#   usb   — seekd.exe (CLI-стрим, транспорт libusb)
+#   dll   — seekcap.dll (для P/Invoke из .NET) + import-либы
+#   test  — golden против Python-эталона (побайтово)
+#   dist  — плоский дистрибутив seekd (exe + runtime-DLL)
+TC      ?= D:/LSDF/toolchains/msys2/ucrt64
+CC      := $(TC)/bin/gcc.exe
+AR      := $(TC)/bin/ar.exe
+PY      ?= D:/LSDF/runtimes/python313/python.exe
+# -ffp-contract=off — НЕ убирать: иначе FMA ломает побитовую golden-совместимость
+CFLAGS  := -std=c11 -O2 -Wall -Wextra -Wconversion -Wno-sign-conversion \
+           -ffp-contract=off -D_WIN32_WINNT=0x0A00
+INC     := -Iinclude -Iusb
+LDLIBS  := -L$(TC)/lib -lusb-1.0 -lm -lpthread
+OBJDIR  := build/win
+
+CORE_SRCS := src/frame.c src/denoise.c src/tonemap.c src/palettes.c src/radiometric.c
+CORE_OBJS := $(addprefix $(OBJDIR)/,$(notdir $(CORE_SRCS:.c=.o)))
+LIBCORE   := $(OBJDIR)/libseekcore.a
+LIBCAP    := $(OBJDIR)/libseekcap.a
+
+.PHONY: all usb dll test dist clean dirs
+
+all: dirs $(LIBCORE) $(OBJDIR)/seekproc.exe
+
+dirs:
+	@mkdir -p $(OBJDIR)
+
+$(OBJDIR)/%.o: src/%.c include/seekcore.h
+	$(CC) $(CFLAGS) -Iinclude -c $< -o $@
+
+$(LIBCORE): $(CORE_OBJS)
+	$(AR) rcs $@ $^
+
+$(OBJDIR)/seekcap.o: usb/seekcap.c usb/seekcap.h include/seekcore.h
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+
+$(LIBCAP): $(OBJDIR)/seekcap.o $(LIBCORE)
+	$(AR) rcs $@ $^
+
+usb: dirs $(OBJDIR)/seekd.exe
+
+$(OBJDIR)/seekd.o: usb/seekd.c usb/seekcap.h
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+
+$(OBJDIR)/seekd.exe: $(OBJDIR)/seekd.o $(LIBCAP) $(LIBCORE)
+	$(CC) $(OBJDIR)/seekd.o $(LIBCAP) $(LIBCORE) -o $@ $(LDLIBS) -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+
+$(OBJDIR)/seekproc.exe: tools/seekproc.c $(LIBCORE)
+	$(CC) $(CFLAGS) -Iinclude $< $(LIBCORE) -o $@ -lm
+
+# DLL для P/Invoke (.NET): все публичные символы через .def, без stdcall-маглинга
+dll: dirs $(OBJDIR)/seekcap.dll
+
+$(OBJDIR)/seekcap.dll: $(OBJDIR)/seekcap.o $(CORE_OBJS) usb/seekcap.def
+	$(CC) -shared -o $@ $(OBJDIR)/seekcap.o $(CORE_OBJS) \
+	    usb/seekcap.def $(LDLIBS) -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+
+test: all
+	@cp $(OBJDIR)/seekproc.exe build/seekproc.exe
+	PYTHONPATH="" "$(PY)" tests/run_golden.py
+
+dist: usb dll
+	mkdir -p dist
+	cp $(OBJDIR)/seekd.exe $(OBJDIR)/seekcap.dll \
+	   $(TC)/bin/libusb-1.0.dll $(TC)/bin/libwinpthread-1.dll dist/
+
+clean:
+	rm -rf $(OBJDIR) dist

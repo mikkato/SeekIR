@@ -12,9 +12,32 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 static volatile sig_atomic_t g_quit = 0;
 static void on_sig(int s) { (void)s; g_quit = 1; }
+
+#ifdef _WIN32
+/* K2: на Windows SIGTERM не доставляется, а закрытие окна консоли убивает
+ * процесс без штатных 60[00 00]x3. Handler ставит g_quit; для CTRL_CLOSE
+ * даём конвейеру ~2,5 с на корректное закрытие (лимит системы ~5 с). */
+static BOOL WINAPI ctrl_handler(DWORD type) {
+    switch (type) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+        g_quit = 1;
+        return TRUE;
+    case CTRL_CLOSE_EVENT:
+        g_quit = 1;
+        Sleep(2500);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+#endif
 
 static double now(void) {
     struct timespec ts;
@@ -54,6 +77,10 @@ int main(int argc, char **argv) {
     }
     signal(SIGINT, on_sig);
     signal(SIGTERM, on_sig);
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8); /* K3: кириллица в stderr */
+    SetConsoleCtrlHandler(ctrl_handler, TRUE);
+#endif
 
     skcap_t *cap = skcap_open(on_frame, NULL, hotmap);
     if (!cap) { fprintf(stderr, "камера недоступна\n"); return 1; }

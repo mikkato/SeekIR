@@ -51,6 +51,7 @@ struct skcap {
     size_t req_bytes;
     int need_request;      /* 1 = pump должен сделать request; -1 = reconnect */
     volatile int chunk_inflight; /* ровно один chunk-URB в полёте           */
+    int err_streak;        /* K4: подряд неудач chunk без успешных данных    */
     uint16_t *ff;
 
     /* статистика */
@@ -195,6 +196,7 @@ static void LIBUSB_CALL chunk_cb(struct libusb_transfer *t) {
     skcap_t *c = (skcap_t *)t->user_data;
     c->chunk_inflight = 0;
     if (t->status == LIBUSB_TRANSFER_COMPLETED && t->actual_length > 0) {
+        c->err_streak = 0;
         /* только буферизация + submit: control-трансферы из callback на
          * darwin вешают pipe (LIBUSB_ERROR_BUSY) */
         if (c->fill + (size_t)t->actual_length > 2 * (size_t)SK_RAW_BYTES) {
@@ -209,18 +211,34 @@ static void LIBUSB_CALL chunk_cb(struct libusb_transfer *t) {
         c->req_bytes += (size_t)t->actual_length;
         if (!c->quit) submit_chunk(c);
     } else if (t->status == LIBUSB_TRANSFER_CANCELLED) {
-        /* штатное закрытие */
+        /* K1: на Windows таймаут бэкенда отменяет URB через AbortPipe, и
+         * CANCELLED приходит НЕ только при закрытии. Молча глушить его —
+         * гарантированный стоп конвейера. Считаем сбоем, если не quit. */
+        if (!c->quit) {
+            c->fill = 0;
+            c->req_bytes = 0;
+            c->need_request = 1;
+        }
     } else {
         c->errors++;
         if (!c->quit) {
             if (t->status == LIBUSB_TRANSFER_NO_DEVICE ||
                 t->status == LIBUSB_TRANSFER_ERROR) {
                 c->need_request = -1; /* рабочий поток переподключится */
+                c->err_streak++;
             } else {
                 libusb_clear_halt(c->h, EP_IN);
                 c->fill = 0;
                 c->req_bytes = 0;
                 c->need_request = 1; /* pump сделает request + submit */
+                c->err_streak++;
+            }
+            /* K4: эскалация — >5 подряд неудач без успешных данных → reconnect
+             * (WinUSB возвращает ERROR_GEN_FAILURE→STALL и при общих сбоях
+             * стека, а не только при реальном halt пайпа) */
+            if (c->err_streak > 5) {
+                c->need_request = -1;
+                c->err_streak = 0;
             }
         }
     }
@@ -323,6 +341,7 @@ static int init_cam(skcap_t *c) {
 }
 
 static void close_cam(skcap_t *c) {
+    if (!c->h) return; /* K7: guard — слать 60[00 00] только на живом handle */
     uint8_t z2[2] = {0, 0};
     for (int i = 0; i < 3; i++) cmd_out(c, CMD_SET_OPERATION_MODE, z2, 2);
     libusb_release_interface(c->h, 0);
@@ -339,7 +358,8 @@ static void *worker(void *arg) {
                 nanosleep(&ts, NULL);
                 continue;
             }
-            libusb_detach_kernel_driver(c->h, 0);
+            /* на Windows всегда NOT_SUPPORTED — безвредно (K8) */
+            (void)libusb_detach_kernel_driver(c->h, 0);
             if (init_cam(c) < 0) {
                 libusb_close(c->h);
                 c->h = NULL;

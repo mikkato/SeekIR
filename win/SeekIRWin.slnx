@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/App/">
+    <Project Path="App/SeekIRWin.App.csproj" />
+  </Folder>
+  <Folder Name="/Core/">
+    <Project Path="Core/SeekIRWin.Core.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,116 @@
+<Window x:Class="SeekIRWin.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:SeekIRWin.App"
+        mc:Ignorable="d"
+        Title="Термография" Width="1100" Height="760" MinWidth="900" MinHeight="600"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <!-- плоский стиль кнопки: без теней/скруглений, 1px граница -->
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource CBtnBgBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource CFgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource CBtnHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel LastChildFill="True" Background="{DynamicResource CBgBrush}">
+        <!-- toolbar 30px: плотно, один ряд -->
+        <Border DockPanel.Dock="Top" Height="30" Background="{DynamicResource CPanelBrush}"
+                BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0">
+                <Button x:Name="BtnConnect" Content="Подключить" Width="90" Click="OnConnect" />
+                <Separator Width="8" Background="Transparent" />
+                <Button x:Name="BtnFreeze" Content="Пауза" Width="60" IsEnabled="False" Click="OnFreeze" />
+                <Separator Width="8" Background="Transparent" />
+                <Button x:Name="BtnSnap" Content="Снимок" Width="70" IsEnabled="False" Click="OnSnap" />
+                <Separator Width="12" Background="Transparent" />
+                <TextBlock Text="палитра" Margin="6,0,4,0" VerticalAlignment="Center"
+                           Foreground="{DynamicResource CFgDimBrush}" FontSize="12" />
+                <ComboBox x:Name="CmbPalette" Width="120" Height="22" FontSize="12"
+                          VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
+                <Separator Width="12" Background="Transparent" />
+                <CheckBox x:Name="ChkAutoSpan" Content="авто-span" IsChecked="True"
+                          VerticalAlignment="Center" FontSize="12" Click="OnAutoSpan" />
+                <Separator Width="12" Background="Transparent" />
+                <TextBlock Text="тема" VerticalAlignment="Center" FontSize="12"
+                           Foreground="{DynamicResource CFgDimBrush}" Margin="6,0,4,0" />
+                <ComboBox x:Name="CmbTheme" Width="104" Height="22" FontSize="12"
+                          VerticalContentAlignment="Center" SelectionChanged="OnTheme">
+                    <ComboBoxItem Content="Системная" IsSelected="True" />
+                    <ComboBoxItem Content="Светлая" />
+                    <ComboBoxItem Content="Тёмная" />
+                </ComboBox>
+            </StackPanel>
+        </Border>
+
+        <!-- status strip 20px -->
+        <Border DockPanel.Dock="Bottom" Height="20" Background="{DynamicResource CStatusBgBrush}"
+                BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="0,1,0,0">
+            <TextBlock x:Name="TxtStatus" Text="камера не подключена" FontSize="11"
+                       VerticalAlignment="Center" Margin="6,0"
+                       Foreground="{DynamicResource CFgDimBrush}" FontFamily="Consolas" />
+        </Border>
+
+        <!-- правая колонка: вертикальная палитра-шкала + подписи span -->
+        <Border DockPanel.Dock="Right" Width="104" Background="{DynamicResource CPanelBrush}"
+                BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="1,0,0,0">
+            <Grid Margin="6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="46" />
+                </Grid.ColumnDefinitions>
+                <Grid Grid.Column="0">
+                    <Image x:Name="PaletteImg" Stretch="Fill"
+                           RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                    <!-- span-окно: приглушение вне окна -->
+                    <Rectangle x:Name="SpanMaskTop" VerticalAlignment="Top" Fill="#99000000" Height="0" />
+                    <Rectangle x:Name="SpanMaskBot" VerticalAlignment="Bottom" Fill="#99000000" Height="0" />
+                </Grid>
+                <StackPanel Grid.Column="1">
+                    <TextBlock x:Name="TxtHi" Text="--" FontSize="10" FontFamily="Consolas"
+                               HorizontalAlignment="Right" Foreground="{DynamicResource CFgBrush}" />
+                    <TextBlock x:Name="TxtMid" Text="--" FontSize="10" FontFamily="Consolas"
+                               Foreground="{DynamicResource CFgDimBrush}" Margin="0,2"
+                               HorizontalAlignment="Right" />
+                    <TextBlock x:Name="TxtLo" Text="--" FontSize="10" FontFamily="Consolas"
+                               HorizontalAlignment="Right" Foreground="{DynamicResource CFgBrush}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- канвас: кадр 4:3 по центру, пропорции без растяжения -->
+        <Grid Background="{DynamicResource CBgBrush}">
+            <Viewbox Stretch="Uniform" Margin="8">
+                <Image x:Name="Img" Width="320" Height="240"
+                       RenderOptions.BitmapScalingMode="NearestNeighbor" />
+            </Viewbox>
+        </Grid>
+    </DockPanel>
+</Window>

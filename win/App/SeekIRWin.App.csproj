@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\SeekIRWin.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>SeekIRWin.App</RootNamespace>
+  </PropertyGroup>
+
+  <!-- нативные DLL рядом с exe (собраны core/Makefile.win -> core/build/win) -->
+  <ItemGroup>
+    <None Include="..\..\core\build\win\seekcap.dll" CopyToOutputDirectory="PreserveNewest" Link="seekcap.dll" />
+    <None Include="D:\LSDF\toolchains\msys2\ucrt64\bin\libusb-1.0.dll" CopyToOutputDirectory="PreserveNewest" Link="libusb-1.0.dll" />
+    <None Include="..\..\core\tests\hot.bin" CopyToOutputDirectory="PreserveNewest" Link="hot.bin" />
+  </ItemGroup>
+
+</Project>
