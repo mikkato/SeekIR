@@ -110,29 +110,72 @@ public partial class MainWindow : Window
             int mid = SeekConst.W * SeekConst.H / 2;
             TxtStatus.Text =
                 $"{f.Fps,4:F1} к/с  кадр {f.Frames}  FF {f.Ffs}  err {f.Errors}  recon {f.Resyncs}  " +
-                $"span {f.Lo:F0}..{f.Hi:F0}  центр {f.Temp[mid]:F1} °C";
+                $"span {f.Lo:F0}..{f.Hi:F0}  центр {f.Temp[mid]:F1} °C  M:{_markWinX},{_markWinY}";
             UpdateScale(f.Lo, f.Hi);
             UpdateMaxMarker(f);
         });
     }
 
     // ---- живой маркер максимума (F2 hot-spot) ----
-    private int _markIdx = -1; // индекс в 320x240; гистерезис против дрожания
+    // Пятно анализа 10x10 px: окно с наибольшим СРЕДНИМ (ищем пятно, не пиксель-
+    // выброс), внутри него — локальный максимум (точный пиксель под перекрестием).
+    private int _markIdx = -1;          // позиция перекрестия (индекс 320x240)
+    private int _markWinX = -1, _markWinY = -1; // левый верх текущего окна
+    private double _markWinMean;        // среднее текущего окна (гистерезис)
+    private const int Win = 10, Margin = 0; // окно 10x10, окна прижимаются к краям (пятно может быть у кромки)
+
+    private readonly double[] _integ = new double[(SeekConst.W + 1) * (SeekConst.H + 1)];
+    private void BuildIntegral(double[] t)
+    {
+        const int W = SeekConst.W, P = W + 1;
+        for (int y = 0; y < H1; y++) _integ[y * P] = 0;
+        for (int x = 0; x < P; x++) _integ[x] = 0;
+        for (int y = 1; y < H1; y++)
+        {
+            double rowSum = 0; int up = (y - 1) * P, cur = y * P, tc = (y - 1) * W;
+            for (int x = 1; x < P; x++)
+            {
+                rowSum += t[tc + x - 1];
+                _integ[cur + x] = _integ[up + x] + rowSum;
+            }
+        }
+    }
+    private const int H1 = SeekConst.H + 1;
+    private double WindowMean(int x0, int y0)
+    {
+        const int W = SeekConst.W, P = W + 1, N = Win * Win;
+        int a = y0 * P + x0, b = y0 * P + x0 + Win, c = (y0 + Win) * P + x0, d = (y0 + Win) * P + x0 + Win;
+        return (_integ[d] - _integ[c] - _integ[b] + _integ[a]) / N;
+    }
     private void UpdateMaxMarker(SeekCam.Frame f)
     {
         var t = f.Temp;
-        int amax = 0; double vmax = t[0];
-        for (int i = 1; i < t.Length; i++)
-            if (t[i] > vmax) { vmax = t[i]; amax = i; }
-        if (_markIdx < 0) _markIdx = amax;
-        else
+        BuildIntegral(t);
+        int bx = -1, by = -1; double bmean = double.MinValue;
+        for (int wy = Margin; wy <= SeekConst.H - Win - Margin; wy++)
+            for (int wx = Margin; wx <= SeekConst.W - Win - Margin; wx++)
+            {
+                double m = WindowMean(wx, wy);
+                if (m > bmean) { bmean = m; bx = wx; by = wy; }
+            }
+        // гистерезис: перескакиваем, только если лучшее окно теплее текущего на 0,5 °C
+        // (оба средних считаем на текущем кадре)
+        if (_markWinX >= 0)
         {
-            double cur = t[_markIdx];
-            // дрожим на месте, пока текущая точка в пределах 0,5 °C от максимума
-            if (vmax > cur + 0.5) _markIdx = amax;
+            double curMean = WindowMean(_markWinX, _markWinY);
+            if (bmean <= curMean + 0.5) { bx = _markWinX; by = _markWinY; bmean = curMean; }
         }
-        int x = _markIdx % SeekConst.W, y = _markIdx / SeekConst.W;
-        double tm = t[_markIdx];
+        _markWinX = bx; _markWinY = by; _markWinMean = bmean;
+        // локальный максимум внутри окна — точная точка перекрестия
+        int px = bx, py = by; double vmax = double.MinValue;
+        for (int ly = by; ly < by + Win; ly++)
+            for (int lx = bx; lx < bx + Win; lx++)
+            {
+                int i = ly * SeekConst.W + lx;
+                if (t[i] > vmax) { vmax = t[i]; px = lx; py = ly; }
+            }
+        _markIdx = py * SeekConst.W + px;
+        int x = px, y = py; double tm = vmax;
         // компактное перекрестие: короткие штрихи сквозь центр, центр закрыт боксом
         const double arm = 9;   // длина луча от центра
         HLine.X1 = x - arm; HLine.X2 = x + arm; HLine.Y1 = y; HLine.Y2 = y;
