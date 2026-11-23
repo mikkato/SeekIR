@@ -143,17 +143,37 @@
                         <Line X1="213.333" Y1="0" X2="213.333" Y2="240" Stroke="#404CC2FF" StrokeThickness="0.5"/>
                         <Line X1="0" Y1="80" X2="320" Y2="80" Stroke="#404CC2FF" StrokeThickness="0.5"/>
                         <Line X1="0" Y1="160" X2="320" Y2="160" Stroke="#404CC2FF" StrokeThickness="0.5"/>
-                        <!-- акцент границ центрального квадрата (зона первичного замера) -->
+                        <!-- акцент границ центрального квадрата (зона замера) -->
                         <Rectangle Canvas.Left="106.667" Canvas.Top="80" Width="106.667" Height="80"
                                    Stroke="#664CC2FF" StrokeThickness="0.7" Fill="Transparent"/>
-                        <Line x:Name="HLine" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
-                        <Line x:Name="VLine" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
-                        <Rectangle x:Name="MarkBox" Width="9" Height="9" Stroke="#FF4CC2FF"
+                        <!-- статичная метка в центре зоны замера -->
+                        <Line X1="154" Y1="120" X2="172" Y2="120" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
+                        <Line X1="163" Y1="111" X2="163" Y2="129" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
+                        <Rectangle Canvas.Left="158.5" Canvas.Top="115.5" Width="9" Height="9"
+                                   Stroke="#FF4CC2FF" StrokeThickness="0.7" Fill="Transparent"/>
+                        <!-- живой маркер максимума по всему полю -->
+                        <Line x:Name="HLine" Stroke="#FFFF7842" StrokeThickness="0.5"/>
+                        <Line x:Name="VLine" Stroke="#FFFF7842" StrokeThickness="0.5"/>
+                        <Rectangle x:Name="MarkBox" Width="9" Height="9" Stroke="#FFFF7842"
                                    StrokeThickness="0.7" Fill="Transparent"/>
-                        <Border x:Name="MarkTag" Background="#CC000000" BorderBrush="#FF4CC2FF"
-                                BorderThickness="0.5" Padding="2,0">
-                            <TextBlock x:Name="MarkTxt" Text="" FontSize="7" FontFamily="Consolas"
+                        <!-- поворот +90 компенсирует -90 канваса: подписи горизонтальны на экране -->
+                        <Border x:Name="CenterTag" Background="#CC000000" BorderBrush="#FF4CC2FF"
+                                BorderThickness="0.5" Padding="2,0"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <RotateTransform Angle="90" />
+                            </Border.RenderTransform>
+                            <TextBlock x:Name="CenterTxt" Text="" FontSize="7" FontFamily="Consolas"
                                        Foreground="#FF4CC2FF"/>
+                        </Border>
+                        <Border x:Name="MarkTag" Background="#CC000000" BorderBrush="#FFFF7842"
+                                BorderThickness="0.5" Padding="2,0"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <RotateTransform Angle="90" />
+                            </Border.RenderTransform>
+                            <TextBlock x:Name="MarkTxt" Text="" FontSize="7" FontFamily="Consolas"
+                                       Foreground="#FFFF7842"/>
                         </Border>
                     </Canvas>
                 </Grid>

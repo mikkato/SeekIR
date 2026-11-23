@@ -112,25 +112,23 @@ public partial class MainWindow : Window
             int mid = SeekConst.W * SeekConst.H / 2;
             TxtStatus.Text =
                 $"{f.Fps,4:F1} к/с  кадр {f.Frames}  FF {f.Ffs}  err {f.Errors}  recon {f.Resyncs}  " +
-                $"span {f.Lo:F0}..{f.Hi:F0}  центр {f.Temp[mid]:F1} °C  M:{_markWinX},{_markWinY}";
+                $"span {f.Lo:F0}..{f.Hi:F0}  центр {f.Temp[mid]:F1} °C";
             UpdateScale(f.Lo, f.Hi);
             UpdateMaxMarker(f);
         });
     }
 
-    // ---- живой маркер максимума (F2 hot-spot) ----
-    // Кадр разбит сеткой 3x3 (нарисована на Ovl). Анализ начинается с
-    // центрального квадрата: первый захват — лучший горячий участок внутри
-    // центра; далее маркер следует за кадром в общем гистерезисе (+0,5 °C).
-    // Внутри выбранной зоны — окно 10x10 с макс. средним, крест ставится на
-    // локальный максимум пикселя внутри окна.
-    private int _markIdx = -1;          // позиция перекрестия (индекс 320x240)
-    private int _markWinX = -1, _markWinY = -1; // левый верх текущего окна
-    private double _markWinMean;        // среднее текущего окна (гистерезис)
-    private const int Win = 10;         // окно анализа 10x10 px
-    // центральный квадрат сетки 3x3: x 107..212, y 80..159 (включительно)
-    private const int Cx0 = SeekConst.W / 3, Cx1 = SeekConst.W * 2 / 3 - 1;
-    private const int Cy0 = SeekConst.H / 3, Cy1 = SeekConst.H * 2 / 3 - 1;
+    // ---- метки температуры (F2) ----
+    // 1) живая (оранжевая): максимум по всему полю — окно 10x10 с наибольшим
+    //    средним (интегральное изображение, устойчиво к шуму), крест на
+    //    локальном максимуме пикселя внутри окна; гистерезис +0,5 °C.
+    // 2) статичная (голубая): просто индикатор температуры в центре кадра —
+    //    среднее окна 10x10 вокруг центра.
+    // Подписи горизонтальны на экране (компенсирующий поворот +90 в XAML).
+    private int _markWinX = -1, _markWinY = -1; // левый верх текущего окна живой метки
+    private const int Win = 10;                 // окно сглаживания 10x10 px
+    // центр кадра (центр статичной метки на сетке)
+    private const int MidX = 163, MidY = 120;
 
     private readonly double[] _integ = new double[(SeekConst.W + 1) * (SeekConst.H + 1)];
     private void BuildIntegral(double[] t)
@@ -159,54 +157,44 @@ public partial class MainWindow : Window
     {
         var t = f.Temp;
         BuildIntegral(t);
-        // лучшее окно 10x10 по всему кадру
-        int bx = -1, by = -1; double bmean = double.MinValue;
+
+        // --- статичная метка центра: среднее 10x10 вокруг центра ---
+        double tcenter = WindowMean(MidX - Win / 2, MidY - Win / 2);
+        CenterTxt.Text = $"{tcenter:F1} \u00b0C";
+        Canvas.SetLeft(CenterTag, MidX + 6); Canvas.SetTop(CenterTag, MidY - 24); // правее на экране
+
+        // --- живая метка: максимум по всему полю ---
+        int bx = 0, by = 0; double bmean = double.MinValue;
         for (int wy = 0; wy <= SeekConst.H - Win; wy++)
             for (int wx = 0; wx <= SeekConst.W - Win; wx++)
             {
                 double m = WindowMean(wx, wy);
                 if (m > bmean) { bmean = m; bx = wx; by = wy; }
             }
-        if (_markWinX < 0)
-        {
-            // старт анализа — из центрального квадрата сетки 3x3
-            bx = -1; by = -1; bmean = double.MinValue;
-            for (int wy = Cy0; wy <= Cy1 - Win + 1; wy++)
-                for (int wx = Cx0; wx <= Cx1 - Win + 1; wx++)
-                {
-                    double m = WindowMean(wx, wy);
-                    if (m > bmean) { bmean = m; bx = wx; by = wy; }
-                }
-        }
-        else
+        if (_markWinX >= 0)
         {
             // гистерезис: перескакиваем, только если лучшее окно теплее текущего на 0,5 °C
-            // (оба средних считаем на текущем кадре)
             double curMean = WindowMean(_markWinX, _markWinY);
-            if (bmean <= curMean + 0.5) { bx = _markWinX; by = _markWinY; bmean = curMean; }
+            if (bmean <= curMean + 0.5) { bx = _markWinX; by = _markWinY; }
         }
-        _markWinX = bx; _markWinY = by; _markWinMean = bmean;
-        // локальный максимум внутри окна — точная точка перекрестия
+        _markWinX = bx; _markWinY = by;
+        // локальный максимум пикселя внутри лучшего окна — точка перекрестия
         int px = bx, py = by; double vmax = double.MinValue;
         for (int ly = by; ly < by + Win; ly++)
             for (int lx = bx; lx < bx + Win; lx++)
             {
-                int i = ly * SeekConst.W + lx;
-                if (t[i] > vmax) { vmax = t[i]; px = lx; py = ly; }
+                double v = t[ly * SeekConst.W + lx];
+                if (v > vmax) { vmax = v; px = lx; py = ly; }
             }
-        _markIdx = py * SeekConst.W + px;
-        int x = px, y = py; double tm = vmax;
-        // компактное перекрестие: короткие штрихи сквозь центр, центр закрыт боксом
-        const double arm = 9;   // длина луча от центра
-        HLine.X1 = x - arm; HLine.X2 = x + arm; HLine.Y1 = y; HLine.Y2 = y;
-        VLine.X1 = x; VLine.X2 = x; VLine.Y1 = y - arm; VLine.Y2 = y + arm;
+        const double arm = 9; // длина луча перекрестия
+        HLine.X1 = px - arm; HLine.X2 = px + arm; HLine.Y1 = py; HLine.Y2 = py;
+        VLine.X1 = px; VLine.X2 = px; VLine.Y1 = py - arm; VLine.Y2 = py + arm;
         Canvas.SetLeft(HLine, 0); Canvas.SetTop(HLine, 0);
         Canvas.SetLeft(VLine, 0); Canvas.SetTop(VLine, 0);
-        Canvas.SetLeft(MarkBox, x - 4.5); Canvas.SetTop(MarkBox, y - 4.5);
-        MarkTxt.Text = $"{tm:F1} \u00b0C";
-        double tx = x + 7, ty = y - 9;
-        if (tx > SeekConst.W - 46) tx = x - 52;
-        if (ty < 1) ty = y + 4;
+        Canvas.SetLeft(MarkBox, px - 4.5); Canvas.SetTop(MarkBox, py - 4.5);
+        MarkTxt.Text = $"{vmax:F1} \u00b0C";
+        double tx = px + 6, ty = py - 24; // правее маркера на экране
+        if (ty < 1) ty = py + 14;         // у верхней границы кадра — влево
         Canvas.SetLeft(MarkTag, tx); Canvas.SetTop(MarkTag, ty);
     }
 
