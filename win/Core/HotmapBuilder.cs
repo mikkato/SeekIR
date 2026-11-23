@@ -26,15 +26,22 @@ public sealed class HotmapBuilder
 
     public void AddFf(ReadOnlySpan<ushort> signal)
     {
-        if (IsDone) return;
+        if (IsDone || Collected >= TargetFf) return;
         for (int i = 0; i < signal.Length; i++)
             _frames[Collected, i / SeekConst.W, i % SeekConst.W] = signal[i];
         if (++Collected >= TargetFf) Compute();
     }
 
+    /// <summary>Досрочный расчёт по накопленным кадрам (мин. 30).</summary>
+    public void ForceCompute()
+    {
+        if (IsDone || Collected < 30) return;
+        Compute();
+    }
+
     private void Compute()
     {
-        int W = SeekConst.W, H = SeekConst.H, N = TargetFf;
+        int W = SeekConst.W, H = SeekConst.H, N = Collected; // досрочный расчёт — по фактическому числу
         var sd = new double[W * H];
         var tmp = new double[N];
         for (int px = 0; px < W * H; px++)

@@ -215,13 +215,21 @@ public partial class MainWindow : Window
         TxtStatus.Text = $"снимок: {name}";
     }
 
-    // ---- карта шума: 60 авто-FF -> HotmapBuilder -> hot.bin -> перезапуск потока ----
     private HotmapBuilder? _hm;
+    private string _hotmapResult = "";
     private void OnHotmap(object sender, RoutedEventArgs e)
     {
-        if (_hm is not null || !_cam.IsOpen) return;
+        if (!_cam.IsOpen) return;
+        if (_hm is not null)
+        {
+            // повторное нажатие — завершить раньше; минимум 30 FF, иначе σ-оценка
+            // зашумлена и карта недооценивает битые пиксели (проверено: 14 FF -> 0.10%)
+            if (_hm.Collected >= 30) { FinishHotmap(_hm); }
+            else { TxtStatus.Text = $"карта шума: рано — {_hm.Collected}/30 FF (повторное нажатие при ≥30)"; }
+            return;
+        }
         _hm = new HotmapBuilder(60);
-        BtnHotmap.IsEnabled = false;
+        BtnHotmap.Content = "Завершить";
         _cam.SetFfCallback(sig =>
         {
             var b = _hm;
@@ -229,15 +237,24 @@ public partial class MainWindow : Window
             b.AddFf(sig);
             Dispatcher.BeginInvoke(() =>
             {
-                if (!b.IsDone) { TxtStatus.Text = $"карта шума: FF {b.Collected}/60 — не двигайте камеру"; return; }
-                string path = HotmapPath();
-                b.Save(path);
-                _cam.SetFfCallback(null);
-                _hm = null;
-                RestartWithHotmap(path);
-                TxtStatus.Text = $"карта шума: {b.Summary} — применена";
+                if (!b.IsDone) { TxtStatus.Text = $"карта шума: FF {b.Collected}/60 — повторное нажатие завершит (мин. 10)"; return; }
+                FinishHotmap(b);
             });
         });
+    }
+
+    private void FinishHotmap(HotmapBuilder b)
+    {
+        // builder считает маску по достижении TargetFf; для досрочного — пересчёт
+        if (!b.IsDone) b.ForceCompute();
+        string path = HotmapPath();
+        b.Save(path);
+        _cam.SetFfCallback(null);
+        _hm = null;
+        BtnHotmap.Content = "Карта шума";
+        RestartWithHotmap(path);
+        TxtStatus.Text = $"карта шума: {b.Summary} — применена";
+        _hotmapResult = b.Summary + " -> " + path;
     }
 
     private static string HotmapPath() =>
