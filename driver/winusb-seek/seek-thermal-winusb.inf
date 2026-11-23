@@ -1,0 +1,38 @@
+; seek-thermal-winusb.inf — WinUSB-драйвер для Seek Thermal CompactPRO FastFrame
+; (USB\VID_289D&PID_0011, PIR324). Эквивалент того, что генерирует libwdi/Zadig:
+; пакет опирается только на inbox winusb.inf (подписан Microsoft), подпись каталога
+; не требуется. Ставится одной командой от администратора (см. install.ps1).
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = USB
+ClassGuid   = {36fc9e60-c465-11cf-8056-444553540000}
+Provider    = %ProviderName%
+CatalogFile = seek-thermal-winusb.cat
+DriverVer   = 11/23/2026,1.0.0.0
+PnpxLockDown = Yes
+
+[Manufacturer]
+%ProviderName% = Standard, NTamd64
+
+[Standard.NTamd64]
+%DeviceName% = USB_Install, USB\VID_289D&PID_0011
+
+[USB_Install]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[USB_Install.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[USB_Install.HW]
+AddReg = Dev_AddReg
+
+[Dev_AddReg]
+; GUID интерфейса устройства — стабилен, чтобы приложение/установки не менялись
+HKR,,DeviceInterfaceGUIDs,0x10000,"{3bc8a9c6-4581-4cd9-b325-f39bf0a95ee0}"
+
+[Strings]
+ProviderName = "Tolmachev / SeekIR"
+DeviceName   = "Seek Thermal CompactPRO (WinUSB)"
