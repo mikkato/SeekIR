@@ -542,7 +542,11 @@ void skcap_dump_dir(skcap_t *c, const char *dir) {
     pthread_mutex_lock(&c->mtx);
     if (dir) {
         snprintf(c->dumpdir, sizeof(c->dumpdir), "%s", dir);
+#ifdef _WIN32
+        mkdir(c->dumpdir);
+#else
         mkdir(c->dumpdir, 0755);
+#endif
     } else {
         c->dumpdir[0] = 0;
     }
