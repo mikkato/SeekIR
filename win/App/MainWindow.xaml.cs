@@ -112,7 +112,36 @@ public partial class MainWindow : Window
                 $"{f.Fps,4:F1} к/с  кадр {f.Frames}  FF {f.Ffs}  err {f.Errors}  recon {f.Resyncs}  " +
                 $"span {f.Lo:F0}..{f.Hi:F0}  центр {f.Temp[mid]:F1} °C";
             UpdateScale(f.Lo, f.Hi);
+            UpdateMaxMarker(f);
         });
+    }
+
+    // ---- живой маркер максимума (F2 hot-spot) ----
+    private int _markIdx = -1; // индекс в 320x240; гистерезис против дрожания
+    private void UpdateMaxMarker(SeekCam.Frame f)
+    {
+        var t = f.Temp;
+        int amax = 0; double vmax = t[0];
+        for (int i = 1; i < t.Length; i++)
+            if (t[i] > vmax) { vmax = t[i]; amax = i; }
+        if (_markIdx < 0) _markIdx = amax;
+        else
+        {
+            double cur = t[_markIdx];
+            // дрожим на месте, пока текущая точка в пределах 0,5 °C от максимума
+            if (vmax > cur + 0.5) _markIdx = amax;
+        }
+        int x = _markIdx % SeekConst.W, y = _markIdx / SeekConst.W;
+        double tm = t[_markIdx];
+        // перекрестие: линии на всю рамку + бокс + подпись
+        Canvas.SetLeft(HLine, 0); Canvas.SetTop(HLine, y); HLine.X1 = 0; HLine.X2 = SeekConst.W;
+        Canvas.SetLeft(VLine, x); Canvas.SetTop(VLine, 0); VLine.Y1 = 0; VLine.Y2 = SeekConst.H;
+        Canvas.SetLeft(MarkBox, x - 4.5); Canvas.SetTop(MarkBox, y - 4.5);
+        MarkTxt.Text = $"{tm:F1} \u00b0C";
+        double tx = x + 7, ty = y - 9;
+        if (tx > SeekConst.W - 46) tx = x - 52;
+        if (ty < 1) ty = y + 4;
+        Canvas.SetLeft(MarkTag, tx); Canvas.SetTop(MarkTag, ty);
     }
 
     private void UpdateScale(double lo, double hi)
