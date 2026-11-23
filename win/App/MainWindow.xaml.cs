@@ -11,6 +11,7 @@ namespace SeekIRWin.App;
 public partial class MainWindow : Window
 {
     private SeekCam _cam = new();
+    private AppConfig _cfg = AppConfig.Load();
     private SeekCam.Frame? _lastFrame;
     private WriteableBitmap? _bmp;
     private WriteableBitmap? _palBmp;
@@ -61,7 +62,32 @@ public partial class MainWindow : Window
         SldSmooth.IsEnabled = true;
         _denReady = true;
         _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
+        // калибровка Планка, если пользователь снимал по чёрному телу (F8)
+        string calib = Path.Combine(AppConfig.Dir, "planck.calib");
+        if (File.Exists(calib)) _cam.PlanckLoad(calib);
+        ApplyScene();
         TxtStatus.Text = "подключение…";
+    }
+
+    private void ApplyScene()
+    {
+        if (!_cam.IsOpen) return;
+        var s = _cfg.Scene;
+        double tRefl = s.TReflEqualsAir ? s.TAtmC : s.TReflC;
+        _cam.SetScene(s.Emissivity, tRefl, s.TAtmC, s.DistanceM, s.RelHumidity);
+    }
+
+    // ---- сцена (радиометрия) ----
+    private void OnScene(object sender, RoutedEventArgs e)
+    {
+        var w = new SceneWindow(_cfg) { Owner = this };
+        if (w.ShowDialog() == true)
+        {
+            ApplyScene();
+            TxtStatus.Text = $"сцена: ε={_cfg.Scene.Emissivity:0.00}, " +
+                             $"T_refl={(_cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC):0.0} °C, " +
+                             $"{_cfg.Scene.DistanceM:0.0} м";
+        }
     }
 
     // ---- тема ----

@@ -62,6 +62,9 @@
                            FontSize="12" FontFamily="Consolas"
                            Foreground="{DynamicResource CAccentBrush}" />
                 <Separator Width="12" Background="Transparent" />
+                <Button x:Name="BtnScene" Content="Сцена…" Width="64" Click="OnScene"
+                        ToolTip="ε материала, отражённая температура, воздух, дистанция" />
+                <Separator Width="12" Background="Transparent" />
                 <ComboBox x:Name="CmbPalette" Width="110" Height="22" FontSize="12"
                           ToolTip="палитра" VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
                 <Separator Width="8" Background="Transparent" />

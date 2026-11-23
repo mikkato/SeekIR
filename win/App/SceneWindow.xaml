@@ -1,0 +1,63 @@
+<Window x:Class="SeekIRWin.App.SceneWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Сцена и излучательная способность"
+        Width="420" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource CBgBrush}">
+    <Grid Margin="14">
+        <Grid.Resources>
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource CFgBrush}" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="FontSize" Value="12" />
+            </Style>
+        </Grid.Resources>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /> <!-- материал -->
+            <RowDefinition Height="Auto" /> <!-- eps -->
+            <RowDefinition Height="Auto" /> <!-- T_refl = воздух -->
+            <RowDefinition Height="Auto" /> <!-- T_refl -->
+            <RowDefinition Height="Auto" /> <!-- T воздуха -->
+            <RowDefinition Height="Auto" /> <!-- дистанция -->
+            <RowDefinition Height="Auto" /> <!-- влажность -->
+            <RowDefinition Height="Auto" /> <!-- кнопка -->
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="170" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Материал (пресет ε)" Margin="0,4" />
+        <ComboBox x:Name="CmbMat" Grid.Row="0" Grid.Column="1" Height="24" Margin="0,4"
+                  SelectionChanged="OnMaterial" VerticalContentAlignment="Center" />
+
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="ε, излучательная способность" Margin="0,4" />
+        <TextBox x:Name="TxtEps" Grid.Row="1" Grid.Column="1" Height="24" Margin="0,4"
+                 VerticalContentAlignment="Center" />
+
+        <CheckBox x:Name="ChkReflAir" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                  Content="Отражённая температура = температура воздуха" Margin="0,6"
+                  FontSize="12" Foreground="{DynamicResource CFgBrush}"
+                  Click="OnReflAir" />
+
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="T отражённая, °C" Margin="0,4" />
+        <TextBox x:Name="TxtRefl" Grid.Row="3" Grid.Column="1" Height="24" Margin="0,4"
+                 VerticalContentAlignment="Center" />
+
+        <TextBlock Grid.Row="4" Grid.Column="0" Text="T воздуха, °C" Margin="0,4" />
+        <TextBox x:Name="TxtAtm" Grid.Row="4" Grid.Column="1" Height="24" Margin="0,4"
+                 VerticalContentAlignment="Center" />
+
+        <TextBlock Grid.Row="5" Grid.Column="0" Text="Дистанция, м" Margin="0,4" />
+        <TextBox x:Name="TxtDist" Grid.Row="5" Grid.Column="1" Height="24" Margin="0,4"
+                 VerticalContentAlignment="Center" />
+
+        <TextBlock Grid.Row="6" Grid.Column="0" Text="Влажность, %" Margin="0,4" />
+        <TextBox x:Name="TxtRh" Grid.Row="6" Grid.Column="1" Height="24" Margin="0,4"
+                 VerticalContentAlignment="Center" />
+
+        <Button x:Name="BtnOk" Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="2"
+                Content="Применить" Height="26" Margin="0,10,0,0" Click="OnOk" />
+    </Grid>
+</Window>

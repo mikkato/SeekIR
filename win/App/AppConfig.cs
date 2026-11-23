@@ -18,6 +18,19 @@ public sealed class AppConfig
     public LlmSection Llm { get; set; } = new();
     public string Palette { get; set; } = "ironbow";
 
+    public sealed class SceneSection
+    {
+        // радиометрия FLIR-стиля: ε, отражённая и воздух, дистанция, влажность
+        public double Emissivity { get; set; } = 0.95;
+        public string Material { get; set; } = "Изолента ПВХ 0.95";
+        public bool TReflEqualsAir { get; set; } = true;
+        public double TReflC { get; set; } = 20.0;
+        public double TAtmC { get; set; } = 20.0;
+        public double DistanceM { get; set; } = 1.0;
+        public double RelHumidity { get; set; } = 50.0;
+    }
+    public SceneSection Scene { get; set; } = new();
+
     public static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SeekIRWin");
     public static string PathJson => Path.Combine(Dir, "config.json");

@@ -49,6 +49,10 @@ public sealed class SeekCam : IDisposable
     public void SetSpanManual(bool on, double lo, double hi) => Native.SetSpanManual(_h, on, lo, hi);
     public void SetScene(double eps, double tRefl, double tAtm, double dist, double rh) =>
         Native.SetScene(_h, eps, tRefl, tAtm, dist, rh);
+    public int PlanckLoad(string? path) => Native.PlanckLoad(_h, Native.Utf8Z(path));
+    public bool PlanckFit(double s1, double c1, double s2, double c2) =>
+        Native.PlanckFit(_h, s1, c1, s2, c2);
+    public int PlanckSave(string path) => Native.PlanckSave(_h, Native.Utf8Z(path));
     public void SetDumpDir(string? dir) => Native.DumpDir(_h, Native.Utf8Z(dir));
 
     /// <summary>Канал FF-кадров (для HotmapBuilder). null = выключить.
