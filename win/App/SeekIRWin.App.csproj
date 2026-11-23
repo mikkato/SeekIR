@@ -22,5 +22,8 @@
     <!-- portable ffmpeg (LGPL) для записи видео: кладём exe рядом с приложением -->
     <None Include="ffmpeg\ffmpeg.exe" CopyToOutputDirectory="PreserveNewest" Link="ffmpeg.exe" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="QuestPDF" Version="2026.9.2" />
+  </ItemGroup>
 
 </Project>

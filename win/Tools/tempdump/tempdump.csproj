@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>tempdump</AssemblyName>
+    <RootNamespace>TempDump</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Core/SeekIRWin.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="D:/MyProjects/SeekIR/core/build/win/seekcap.dll" CopyToOutputDirectory="PreserveNewest" Link="seekcap.dll" />
+    <None Include="D:/LSDF/toolchains/msys2/ucrt64/bin/libusb-1.0.dll" CopyToOutputDirectory="PreserveNewest" Link="libusb-1.0.dll" />
+  </ItemGroup>
+
+</Project>

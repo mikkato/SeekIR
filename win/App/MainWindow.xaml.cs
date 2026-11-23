@@ -141,7 +141,10 @@ public partial class MainWindow : Window
             double rowSum = 0; int up = (y - 1) * P, cur = y * P, tc = (y - 1) * W;
             for (int x = 1; x < P; x++)
             {
-                rowSum += t[tc + x - 1];
+                double v = t[tc + x - 1];
+                // невалидные пиксели ядра (-273.15, см. radiometric.c) в сумму не входят:
+                // окно с заглушками становится холоднее и не выигрывает поиск
+                rowSum += v > -200 ? v : 0;
                 _integ[cur + x] = _integ[up + x] + rowSum;
             }
         }
@@ -164,18 +167,23 @@ public partial class MainWindow : Window
         Canvas.SetLeft(CenterTag, MidX + 6); Canvas.SetTop(CenterTag, MidY - 24); // правее на экране
 
         // --- живая метка: максимум по всему полю ---
-        int bx = 0, by = 0; double bmean = double.MinValue;
-        for (int wy = 0; wy <= SeekConst.H - Win; wy++)
-            for (int wx = 0; wx <= SeekConst.W - Win; wx++)
+        // По данным замеров (docs/research/hotspot-empirics.md): кромки ROI
+        // статично приподняты на +0,5..+1,1 °C (FF-цепочка), поэтому окна,
+        // касающиеся 12-пиксельной рамки, из поиска исключаются; невалидные
+        // пиксели (-273.15) уже обнулены в BuildIntegral и окно не выиграет.
+        const int K = 12;
+        int bx = K, by = K; double bmean = double.MinValue;
+        for (int wy = K; wy <= SeekConst.H - Win - K; wy++)
+            for (int wx = K; wx <= SeekConst.W - Win - K; wx++)
             {
                 double m = WindowMean(wx, wy);
                 if (m > bmean) { bmean = m; bx = wx; by = wy; }
             }
         if (_markWinX >= 0)
         {
-            // гистерезис: перескакиваем, только если лучшее окно теплее текущего на 0,5 °C
+            // гистерезис: перескакиваем, только если лучшее окно теплее текущего на 0,3 °C
             double curMean = WindowMean(_markWinX, _markWinY);
-            if (bmean <= curMean + 0.5) { bx = _markWinX; by = _markWinY; }
+            if (bmean <= curMean + 0.3) { bx = _markWinX; by = _markWinY; }
         }
         _markWinX = bx; _markWinY = by;
         // локальный максимум пикселя внутри лучшего окна — точка перекрестия
