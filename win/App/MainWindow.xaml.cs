@@ -11,6 +11,7 @@ namespace SeekIRWin.App;
 public partial class MainWindow : Window
 {
     private SeekCam _cam = new();
+    private SeekCam.Frame? _lastFrame;
     private WriteableBitmap? _bmp;
     private WriteableBitmap? _palBmp;
     private bool _frozen;
@@ -55,6 +56,7 @@ public partial class MainWindow : Window
         _retry?.Stop();
         BtnConnect.IsEnabled = false;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = BtnHotmap.IsEnabled = true;
+        BtnExportJpg.IsEnabled = BtnExportPng.IsEnabled = true;
         SldSmooth.IsEnabled = true;
         _denReady = true;
         _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
@@ -84,6 +86,8 @@ public partial class MainWindow : Window
 
     private void OnFrame(SeekCam.Frame f)
     {
+        // снимок берёт raw-сигнал последнего ПОКАЗАННОГО кадра (на паузе — замороженного)
+        if (!_frozen) _lastFrame = f;
         Dispatcher.BeginInvoke(() =>
         {
             if (_frozen) return;
@@ -205,14 +209,29 @@ public partial class MainWindow : Window
 
     private void OnSnap(object sender, RoutedEventArgs e)
     {
+        var f = _lastFrame;
+        if (_bmp is null || f is null) return;
+        string name = $"IR_{DateTime.Now:yyyyMMdd_HHmmss}";
+        var meta = new SnapshotMeta
+        {
+            Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+            Palette = CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "ironbow",
+            SpanLo = f.Lo, SpanHi = f.Hi, SpanAuto = ChkAutoSpan.IsChecked == true,
+            Fps = f.Fps, CenterCelsius = f.Temp[SeekConst.W * SeekConst.H / 2],
+            MeanSignal = f.MeanSignal,
+            Smooth = (float)SldSmooth.Value, Motion = SeekConst.Motion, Spatial = SeekConst.Spatial,
+            Hotmap = ResolveHotmap() ?? "",
+        };
+        string dir = Gallery.Save(name, f.Signal, Exports.Png(_bmp), meta);
+        TxtStatus.Text = $"снимок: {Path.GetFileName(dir)} (raw+png+meta)";
+    }
+
+    private void OnExport(object sender, RoutedEventArgs e)
+    {
         if (_bmp is null) return;
-        Directory.CreateDirectory(_snapDir);
-        string name = $"IR_{DateTime.Now:yyyyMMdd_HHmmss}.png";
-        var enc = new PngBitmapEncoder();
-        enc.Frames.Add(BitmapFrame.Create(_bmp));
-        using var fs = File.Create(Path.Combine(_snapDir, name));
-        enc.Save(fs);
-        TxtStatus.Text = $"снимок: {name}";
+        string baseName = $"IR_{DateTime.Now:yyyyMMdd_HHmmss}";
+        if (sender == BtnExportJpg) Exports.ExportDialog(_bmp, baseName, jpeg: true);
+        else Exports.ExportDialog(_bmp, baseName, jpeg: false);
     }
 
     private HotmapBuilder? _hm;
@@ -271,6 +290,7 @@ public partial class MainWindow : Window
         bool ok = _cam.Open(File.Exists(hotpath) ? hotpath : ResolveHotmap());
         BtnHotmap.IsEnabled = ok;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = ok;
+        BtnExportJpg.IsEnabled = BtnExportPng.IsEnabled = ok;
         BtnConnect.IsEnabled = !ok;
         SldSmooth.IsEnabled = _denReady = ok;
         if (ok) _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
