@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using SeekIRWin.Core;
@@ -8,8 +9,14 @@ namespace SeekIRWin.App;
 /// <summary>Экспорт кадров FW1: PNG/JPG из WriteableBitmap (WPF-энкодеры).</summary>
 public static class Exports
 {
+    /// <summary>Поворот кадра на 90° против часовой — как на экране (камера
+    /// держится вертикально). Raw signal.r16 в галерее не поворачивается.</summary>
+    public static BitmapSource Rotated(BitmapSource src) =>
+        new TransformedBitmap(src, new RotateTransform(-90));
+
     public static byte[] Png(BitmapSource bmp, int quality = -1)
     {
+        bmp = Rotated(bmp);
         var enc = quality < 0 ? (BitmapEncoder)new PngBitmapEncoder()
                               : new JpegBitmapEncoder { QualityLevel = quality };
         enc.Frames.Add(BitmapFrame.Create(bmp));

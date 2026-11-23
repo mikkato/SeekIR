@@ -57,32 +57,26 @@
                 <Separator Width="8" Background="Transparent" />
                 <Button x:Name="BtnHotmap" Content="Карта шума" Width="90" IsEnabled="False" Click="OnHotmap" />
                 <Separator Width="12" Background="Transparent" />
-                <TextBlock Text="палитра" Margin="6,0,4,0" VerticalAlignment="Center"
-                           Foreground="{DynamicResource CFgDimBrush}" FontSize="12" />
-                <ComboBox x:Name="CmbPalette" Width="120" Height="22" FontSize="12"
-                          VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
-                <Separator Width="12" Background="Transparent" />
-                <TextBlock Text="масштаб" VerticalAlignment="Center" FontSize="12"
-                           Foreground="{DynamicResource CFgDimBrush}" Margin="6,0,4,0" />
-                <ComboBox x:Name="CmbScale" Width="86" Height="22" FontSize="12"
+                <ComboBox x:Name="CmbPalette" Width="110" Height="22" FontSize="12"
+                          ToolTip="палитра" VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
+                <Separator Width="8" Background="Transparent" />
+                <ComboBox x:Name="CmbScale" Width="92" Height="22" FontSize="12"
+                          ToolTip="масштаб: ближний / линейный / кубический"
                           VerticalContentAlignment="Center" SelectionChanged="OnScaleMode">
                     <ComboBoxItem Content="ближний" IsSelected="True" />
                     <ComboBoxItem Content="линейный" />
                     <ComboBoxItem Content="кубический" />
                 </ComboBox>
-                <Separator Width="12" Background="Transparent" />
-                <TextBlock Text="сглаживание" VerticalAlignment="Center" FontSize="12"
-                           Foreground="{DynamicResource CFgDimBrush}" Margin="6,0,4,0" />
+                <Separator Width="8" Background="Transparent" />
                 <Slider x:Name="SldSmooth" Width="90" Height="18" Minimum="0" Maximum="1"
-                        Value="0.75" VerticalAlignment="Center"
+                        Value="0.75" VerticalAlignment="Center" ToolTip="сглаживание (F9 smooth)"
                         IsEnabled="False" ValueChanged="OnSmooth" />
-                <Separator Width="12" Background="Transparent" />
+                <Separator Width="8" Background="Transparent" />
                 <CheckBox x:Name="ChkAutoSpan" Content="авто-span" IsChecked="True"
                           VerticalAlignment="Center" FontSize="12" Click="OnAutoSpan" />
-                <Separator Width="12" Background="Transparent" />
-                <TextBlock Text="тема" VerticalAlignment="Center" FontSize="12"
-                           Foreground="{DynamicResource CFgDimBrush}" Margin="6,0,4,0" />
+                <Separator Width="8" Background="Transparent" />
                 <ComboBox x:Name="CmbTheme" Width="104" Height="22" FontSize="12"
+                          ToolTip="тема: системная / светлая / тёмная"
                           VerticalContentAlignment="Center" SelectionChanged="OnTheme">
                     <ComboBoxItem Content="Системная" IsSelected="True" />
                     <ComboBoxItem Content="Светлая" />
@@ -126,11 +120,16 @@
             </Grid>
         </Border>
 
-        <!-- канвас: кадр 4:3 по центру, пропорции без растяжения -->
+        <!-- канвас: кадр повёрнут 90° против ч.с. (камера держится вертикально),
+             пропорции без растяжения -->
         <Grid Background="{DynamicResource CBgBrush}">
             <Viewbox Stretch="Uniform" Margin="8">
                 <Image x:Name="Img" Width="320" Height="240"
-                       RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                       RenderOptions.BitmapScalingMode="NearestNeighbor">
+                    <Image.LayoutTransform>
+                        <RotateTransform Angle="-90" />
+                    </Image.LayoutTransform>
+                </Image>
             </Viewbox>
         </Grid>
     </DockPanel>
