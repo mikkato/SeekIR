@@ -58,6 +58,21 @@
                 <ComboBox x:Name="CmbPalette" Width="120" Height="22" FontSize="12"
                           VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
                 <Separator Width="12" Background="Transparent" />
+                <TextBlock Text="масштаб" VerticalAlignment="Center" FontSize="12"
+                           Foreground="{DynamicResource CFgDimBrush}" Margin="6,0,4,0" />
+                <ComboBox x:Name="CmbScale" Width="86" Height="22" FontSize="12"
+                          VerticalContentAlignment="Center" SelectionChanged="OnScaleMode">
+                    <ComboBoxItem Content="ближний" IsSelected="True" />
+                    <ComboBoxItem Content="линейный" />
+                    <ComboBoxItem Content="кубический" />
+                </ComboBox>
+                <Separator Width="12" Background="Transparent" />
+                <TextBlock Text="сглаживание" VerticalAlignment="Center" FontSize="12"
+                           Foreground="{DynamicResource CFgDimBrush}" Margin="6,0,4,0" />
+                <Slider x:Name="SldSmooth" Width="90" Height="18" Minimum="0" Maximum="1"
+                        Value="0.75" VerticalAlignment="Center"
+                        IsEnabled="False" ValueChanged="OnSmooth" />
+                <Separator Width="12" Background="Transparent" />
                 <CheckBox x:Name="ChkAutoSpan" Content="авто-span" IsChecked="True"
                           VerticalAlignment="Center" FontSize="12" Click="OnAutoSpan" />
                 <Separator Width="12" Background="Transparent" />

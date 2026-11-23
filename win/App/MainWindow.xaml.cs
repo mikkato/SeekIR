@@ -55,6 +55,9 @@ public partial class MainWindow : Window
         _retry?.Stop();
         BtnConnect.IsEnabled = false;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = BtnHotmap.IsEnabled = true;
+        SldSmooth.IsEnabled = true;
+        _denReady = true;
+        _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
         TxtStatus.Text = "подключение…";
     }
 
@@ -166,6 +169,24 @@ public partial class MainWindow : Window
     }
 
     // ---- управление ----
+    private void OnScaleMode(object sender, SelectionChangedEventArgs e)
+    {
+        if (Img is null || CmbScale?.SelectedIndex is null) return;
+        RenderOptions.SetBitmapScalingMode(Img, CmbScale.SelectedIndex switch
+        {
+            1 => BitmapScalingMode.Linear,
+            2 => BitmapScalingMode.HighQuality, // кубический/fant
+            _ => BitmapScalingMode.NearestNeighbor,
+        });
+    }
+
+    private bool _denReady; // не дёргать ядро до подключения
+    private void OnSmooth(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_denReady || !_cam.IsOpen) return;
+        _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
+    }
+
     private void OnFreeze(object sender, RoutedEventArgs e)
     {
         _frozen = !_frozen;
@@ -234,6 +255,8 @@ public partial class MainWindow : Window
         BtnHotmap.IsEnabled = ok;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = ok;
         BtnConnect.IsEnabled = !ok;
+        SldSmooth.IsEnabled = _denReady = ok;
+        if (ok) _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
         if (!ok) StartRetryTimer();
         if (!ok) TxtStatus.Text = "камера не вернулась после перезапуска (пероткните USB)";
     }
