@@ -193,8 +193,16 @@ public partial class MainWindow : Window
         Canvas.SetLeft(VLine, 0); Canvas.SetTop(VLine, 0);
         Canvas.SetLeft(MarkBox, px - 4.5); Canvas.SetTop(MarkBox, py - 4.5);
         MarkTxt.Text = $"{vmax:F1} \u00b0C";
-        double tx = px + 6, ty = py - 24; // правее маркера на экране
-        if (ty < 1) ty = py + 14;         // у верхней границы кадра — влево
+        // КАНВАС повёрнут на -90 (LayoutTransform): канвас-Y = горизонталь экрана
+        // (вправо = рост Y), канвас-X = вертикаль (выше = больший X).
+        // Подпись (макет ~46x12) повёрнута +90 внутри канваса: её след на канвасе
+        // X:[tx+17,tx+29], Y:[ty-17,ty+29], центр (tx+23, ty+6).
+        // Цель: справа от маркера, по его высоте.
+        double tx = px - 23;                       // центр подписи на высоте маркера
+        if (tx < 0) tx = 0; if (tx > SeekConst.W - 46) tx = SeekConst.W - 46;
+        double ty = py + 8;                        // правее маркера
+        if (ty + 29 > SeekConst.H) ty = py - 20;   // не влезает справа — влево
+        if (ty < 0) ty = 0; if (ty > SeekConst.H - 46) ty = SeekConst.H - 46;
         Canvas.SetLeft(MarkTag, tx); Canvas.SetTop(MarkTag, ty);
     }
 
