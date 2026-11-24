@@ -66,6 +66,7 @@ public partial class MainWindow : Window
         if (_cam.IsOpen) { _retry?.Stop(); return; }
         string? hot = ResolveHotmap();
         if (!_cam.Open(hot)) return;
+        _cam.SetGainPath(GainCachePath()); // NUC-карта ID4: загрузить кэш, писать свежую
         _retry?.Stop();
         BtnConnect.IsEnabled = false;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = BtnHotmap.IsEnabled = true;
@@ -238,6 +239,16 @@ public partial class MainWindow : Window
         if (File.Exists(user)) return user;
         string p = Path.Combine(AppContext.BaseDirectory, "hot.bin");
         return File.Exists(p) ? p : null;
+    }
+
+    /// <summary>Кэш NUC-карты усиления (кадр ID4 PRO). Ядро читает его при
+    /// открытии и перезаписывает при приёме свежей карты с камеры.</summary>
+    private static string GainCachePath()
+    {
+        string dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SeekIRWin");
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, "gain.cache");
     }
 
     private void OnFrame(SeekCam.Frame f)
@@ -736,6 +747,7 @@ public partial class MainWindow : Window
         _cam = new SeekCam();
         _cam.FrameArrived += OnFrame;
         bool ok = _cam.Open(File.Exists(hotpath) ? hotpath : ResolveHotmap());
+        if (ok) _cam.SetGainPath(GainCachePath());
         BtnHotmap.IsEnabled = ok;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = ok;
         BtnExportJpg.IsEnabled = BtnExportPng.IsEnabled = ok;

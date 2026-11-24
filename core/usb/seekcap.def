@@ -36,3 +36,4 @@ EXPORTS
     skcap_set_ff_cb
     skcap_stats
     skcap_fid_hist
+    skcap_gain_path

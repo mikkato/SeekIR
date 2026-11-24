@@ -72,6 +72,10 @@ void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,
  * size=64. Для диагностики калибровочного потока камеры. */
 void skcap_fid_hist(skcap_t *c, long *out64);
 
+/* Кэш gain-карты ID4 (файл float SK_W*SK_H). Загружает из path, если он
+ * есть; при приёме ID4 с камеры перезаписывает. Путь NULL = выключить. */
+void skcap_gain_path(skcap_t *c, const char *path);
+
 #ifdef __cplusplus
 }
 #endif

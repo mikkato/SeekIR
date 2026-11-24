@@ -55,6 +55,7 @@ public sealed class SeekCam : IDisposable
         Native.PlanckFit(_h, s1, c1, s2, c2);
     public int PlanckSave(string path) => Native.PlanckSave(_h, Native.Utf8Z(path));
     public void SetDumpDir(string? dir) => Native.DumpDir(_h, Native.Utf8Z(dir));
+    public void SetGainPath(string? path) => Native.GainPath(_h, Native.Utf8Z(path));
 
     /// <summary>Канал FF-кадров (для HotmapBuilder). null = выключить.
     /// ВАЖНО: в этом колбэке валидно только поле Signal (ROI FF), rgb/temp — нет.</summary>

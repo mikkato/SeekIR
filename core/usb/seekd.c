@@ -53,15 +53,15 @@ static void on_frame(void *user, const skcap_frame_t *f) {
         t_last = t;
         size_t mid = (size_t)SK_W * SK_H / 2;
         fprintf(stderr, "  %.1f к/с (img=%ld ff=%ld err=%ld resync=%ld) "
-                        "span=%.1f..%.1f Tцентр=%.1fC\n",
+                        "span=%.1f..%.1f Tцентр=%.1fC FPA=%.1fC\n",
                 f->fps, f->frames, f->ffs, f->errors, f->resyncs, f->lo,
-                f->hi, f->temp[mid]);
+                f->hi, f->temp[mid], f->t_dev_c);
     }
 }
 
 int main(int argc, char **argv) {
     double t_end = 1e18;
-    const char *dumpdir = NULL, *hotmap = NULL;
+    const char *dumpdir = NULL, *hotmap = NULL, *gainpath = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--secs") && i + 1 < argc)
             t_end = now() + atof(argv[++i]);
@@ -69,6 +69,8 @@ int main(int argc, char **argv) {
             dumpdir = argv[++i];
         else if (!strcmp(argv[i], "--hotmap") && i + 1 < argc)
             hotmap = argv[++i];
+        else if (!strcmp(argv[i], "--gain") && i + 1 < argc)
+            gainpath = argv[++i];
         else {
             fprintf(stderr,
                     "usage: seekd [--secs N] [--dump DIR] [--hotmap hot.bin]\n");
@@ -85,6 +87,7 @@ int main(int argc, char **argv) {
     skcap_t *cap = skcap_open(on_frame, NULL, hotmap);
     if (!cap) { fprintf(stderr, "камера недоступна\n"); return 1; }
     if (dumpdir) skcap_dump_dir(cap, dumpdir);
+    if (gainpath) skcap_gain_path(cap, gainpath);
 
     while (!g_quit && now() < t_end) {
         struct timespec ts = {0, 100 * 1000 * 1000};
@@ -93,6 +96,14 @@ int main(int argc, char **argv) {
     long fr, ff, er, rs;
     int conn;
     skcap_stats(cap, &fr, &ff, &er, &rs, &conn);
+    {
+        long h[64];
+        skcap_fid_hist(cap, h);
+        fprintf(stderr, "[seekd] fid-гистограмма:");
+        for (int i = 0; i < 64; i++)
+            if (h[i]) fprintf(stderr, " %d:%ld", i, h[i]);
+        fprintf(stderr, "\n");
+    }
     skcap_close(cap);
     fprintf(stderr, "[seekd] img=%ld ff=%ld errors=%ld resync=%ld\n", fr, ff,
             er, rs);

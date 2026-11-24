@@ -58,6 +58,9 @@ public static partial class Native
     [LibraryImport(Lib, EntryPoint = "skcap_dump_dir")]
     public static partial void DumpDir(IntPtr c, byte[]? dirUtf8);
 
+    [LibraryImport(Lib, EntryPoint = "skcap_gain_path")]
+    public static partial void GainPath(IntPtr c, byte[]? pathUtf8);
+
     [LibraryImport(Lib, EntryPoint = "skcap_set_ff_cb")]
     public static partial void SetFfCb(IntPtr c, SkcapCallback cb, IntPtr user);
 

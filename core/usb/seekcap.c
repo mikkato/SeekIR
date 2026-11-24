@@ -55,8 +55,10 @@ struct skcap {
     volatile int chunk_inflight; /* ровно один chunk-URB в полёте           */
     int err_streak;        /* K4: подряд неудач chunk без успешных данных    */
     uint16_t *ff;
-
-    /* статистика */
+    float *gain;         /* NUC-карта попиксельного усиления из кадра ID4 (PRO):
+                          * avg/g; мёртвые пиксели (g<100) — 0 -> заполнение
+                          * соседями. Приходит на старте один раз. */
+    int gain_ready;
     long images, ffs, errors, resyncs;
     long fid_hist[64];   /* счётчик всех типов кадров (диагностика калибрации) */
     double t_fps_start;
@@ -70,9 +72,11 @@ struct skcap {
     bool span_manual; double man_lo, man_hi;
     sk_scene_t scene;
     sk_planck_t planck; bool planck_set;
+    double dref_ema;     /* скользящая медиана gain-корр. D (самопривязка 0 °C) */
 
     /* дампы */
     char dumpdir[512];
+    char gainpath[512];  /* кэш gain-карты ID4 (приходит только при подаче питания) */
     int frame_idx;
 
     /* core-состояние (только рабочий поток) */
@@ -128,6 +132,41 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
         FILE *cf = fopen(cp, "wb"); /* перезапись: нужен последний экземпляр */
         if (cf) { fwrite(raw, 1, SK_RAW_BYTES, cf); fclose(cf); }
     }
+    if (fid == 4) {
+        /* NUC-карта попиксельного усиления (PRO, приходит на старте):
+         * gain = avg(g)/g, мёртвые пиксели (g<100) -> 1.0 (нейтрально).
+         * Проверено на дампе: убирает фикс. узор 292->56 counts,
+         * временной FPN 915->119. Сохраняем на диск: камера шлёт её
+         * только при подаче питания. */
+        if (!c->gain) c->gain = (float *)malloc(sizeof(float) * SK_W * SK_H);
+        if (c->gain) {
+            double sum = 0.0;
+            int nvalid = 0;
+            static uint16_t gtmp[SK_W * SK_H];
+            for (int y = 0; y < SK_H; y++)
+                for (int x = 0; x < SK_W; x++) {
+                    uint16_t g = raw[(y + SK_ROI_Y) * SK_RAW_W + (x + SK_ROI_X)];
+                    gtmp[y * SK_W + x] = g;
+                    if (g >= 100) { sum += g; nvalid++; }
+                }
+            if (nvalid > SK_W * SK_H / 2) {
+                float avg = (float)(sum / nvalid);
+                for (int i = 0; i < SK_W * SK_H; i++) {
+                    float g = (gtmp[i] >= 100) ? avg / (float)gtmp[i] : 1.0f;
+                    if (g < 0.5f) g = 0.5f;
+                    if (g > 2.0f) g = 2.0f;
+                    if (gtmp[i] < 100) g = 1.0f;
+                    c->gain[i] = g;
+                }
+                c->gain_ready = 1;
+                if (c->gainpath[0]) {
+                    FILE *gf = fopen(c->gainpath, "wb");
+                    if (gf) { fwrite(c->gain, sizeof(float), (size_t)SK_W * SK_H, gf); fclose(gf); }
+                }
+            }
+        }
+        return;
+    }
     if (fid == SK_FID_FF) {
         if (!c->ff) c->ff = (uint16_t *)malloc(SK_RAW_BYTES);
         if (c->ff) memcpy(c->ff, raw, SK_RAW_BYTES);
@@ -147,6 +186,14 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
         return;
     }
     if (fid != SK_FID_IMAGE || !c->ff) return;
+
+    /* внутр. термистор FPA: raw[5] (PRO), бетта-кривая sfalexrog, ref
+     * поданкорен на наш экземпляр: raw[5]=7222 при холодном старте =
+     * комната ~20.5 C (ref=7167, B=200). */
+    {
+        double x = (double)raw[5];
+        c->t_dev_c = (x > 0.0) ? (1.0 / (log(x / 7167.0) / 200.0 + 1.0 / 297.0) - 273.15) : 0.0;
+    }
 
     static float hot[SK_W * SK_H];
     static double den64[SK_W * SK_H];
@@ -169,16 +216,30 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
     sk_tonemap_apply(&c->tm, den64, from_f32, gray);
     sk_palette_map(c->lut, gray, c->rgb);
 
-    for (size_t i = 0; i < (size_t)SK_W * SK_H; i++)
-        c->temp[i] = sk_signal_to_celsius(&planck, &scene, den64[i]);
+    /* === радиометрия PRO: gain-NUC (ID4) + линейная шкала с самопривязкой ===
+     * D = (den − 16384) * gain — скорр. по шторке и по попикс. усилению.
+     * Абсолют: Dref = EMA медианы D (сцена~равновесие с FPA, аналог
+     * environment_temperature SDK) -> T = T_dev + (D − Dref)/k.
+     * Golden не затронут: seekproc гоняет свой путь без gain-карты. */
+    if (c->gain_ready) {
+        double sum = 0.0;
+        for (size_t i = 0; i < (size_t)SK_W * SK_H; i++)
+            sum += (den64[i] - 16384.0) * (double)c->gain[i];
+        double dmed = sum / ((double)SK_W * SK_H);
+        if (c->dref_ema < -1e8) c->dref_ema = dmed;
+        else c->dref_ema += 0.02 * (dmed - c->dref_ema);
+        const double k = 58.6; /* counts/°C: 21.95 counts/°F кривой ID9 ×2 (PRO) */
+        for (size_t i = 0; i < (size_t)SK_W * SK_H; i++) {
+            double d = (den64[i] - 16384.0) * (double)c->gain[i];
+            c->temp[i] = c->t_dev_c + (d - c->dref_ema) / k;
+        }
+    } else {
+        for (size_t i = 0; i < (size_t)SK_W * SK_H; i++)
+            c->temp[i] = sk_signal_to_celsius(&planck, &scene, den64[i]);
+    }
 
     c->images++;
     c->n_fps++;
-    /* внутр. термистор FPA: raw[5] (PRO), бетта-кривая sfalexrog */
-    {
-        double x = (double)raw[5];
-        c->t_dev_c = (x > 0.0) ? (1.0 / (log(x / 6616.0) / 200.0 + 1.0 / 297.0) - 273.15) : 0.0;
-    }
     double t = now();
     if (t - c->t_fps_start > 2.0) {
         c->fps = c->n_fps / (t - c->t_fps_start);
@@ -437,6 +498,7 @@ static void *worker(void *arg) {
 
 skcap_t *skcap_open(skcap_cb cb, void *user, const char *hotmap_path) {
     skcap_t *c = (skcap_t *)calloc(1, sizeof(skcap_t));
+    if (c) c->dref_ema = -1e30; /* «не задано»: первая медиана D задаёт анкор */
     if (!c) return NULL;
     c->cb = cb;
     c->user = user;
@@ -488,6 +550,7 @@ void skcap_close(skcap_t *c) {
     free(c->asm_buf);
     free(c->hot);
     free(c->ff);
+    free(c->gain);
     libusb_exit(c->ctx);
     pthread_mutex_destroy(&c->mtx);
     free(c);
@@ -625,4 +688,31 @@ void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,
 void skcap_fid_hist(skcap_t *c, long *out64) {
     if (!c || !out64) return;
     for (int i = 0; i < 64; i++) out64[i] = c->fid_hist[i];
+}
+
+/* Путь кэша gain-карты ID4. Если файл существует и валиден по размеру —
+ * карта загружается немедленно (камера шлёт ID4 только при подаче питания).
+ * При приёме свежей карты она перезаписывается (см. process_frame). */
+void skcap_gain_path(skcap_t *c, const char *path) {
+    if (!c) return;
+    pthread_mutex_lock(&c->mtx);
+    if (path) snprintf(c->gainpath, sizeof(c->gainpath), "%s", path);
+    else c->gainpath[0] = 0;
+    pthread_mutex_unlock(&c->mtx);
+    if (!path) return;
+    if (!c->gain) c->gain = (float *)malloc(sizeof(float) * SK_W * SK_H);
+    if (!c->gain) return;
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        size_t n = fread(c->gain, sizeof(float), (size_t)SK_W * SK_H, f);
+        fclose(f);
+        if (n == (size_t)SK_W * SK_H) {
+            int ok = 1;
+            for (int i = 0; i < SK_W * SK_H; i++) {
+                float g = c->gain[i];
+                if (!(g > 0.1f && g < 10.0f)) { ok = 0; break; }
+            }
+            if (ok) c->gain_ready = 1;
+        }
+    }
 }
