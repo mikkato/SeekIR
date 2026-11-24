@@ -29,7 +29,7 @@ public sealed class SnapshotMeta
     public double DistanceM { get; set; } = 1;
     public double RelHumidity { get; set; } = 50;
     public string Hotmap { get; set; } = "";
-    public string App { get; set; } = "SeekIRWin 0.3.0";
+    public string App { get; set; } = "SeekIRWin 0.4.0";
 }
 
 public static class Gallery
