@@ -12,6 +12,7 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>SeekIRWin.App</RootNamespace>
+    <Version>0.3.0</Version>
     <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -25,8 +26,11 @@
     <None Include="..\..\core\build\win\seekcap.dll" CopyToOutputDirectory="PreserveNewest" Link="seekcap.dll" />
     <None Include="D:\LSDF\toolchains\msys2\ucrt64\bin\libusb-1.0.dll" CopyToOutputDirectory="PreserveNewest" Link="libusb-1.0.dll" />
     <None Include="..\..\core\tests\hot.bin" CopyToOutputDirectory="PreserveNewest" Link="hot.bin" />
-    <!-- portable ffmpeg (LGPL) для записи видео: кладём exe рядом с приложением -->
+    <!-- bundled ffmpeg (GPLv3) для записи видео: кладём exe рядом с приложением;
+         лицензия (GPLv3) и офер исходников — в ffmpeg\LICENSE-GPLv3.txt и ffmpeg\README.md -->
     <None Include="ffmpeg\ffmpeg.exe" CopyToOutputDirectory="PreserveNewest" Link="ffmpeg.exe" />
+    <None Include="ffmpeg\LICENSE-GPLv3.txt" CopyToOutputDirectory="PreserveNewest" Link="LICENSE-GPLv3.txt" />
+    <None Include="ffmpeg\README.md" CopyToOutputDirectory="PreserveNewest" Link="ffmpeg-README.md" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="QuestPDF" Version="2026.9.2" />

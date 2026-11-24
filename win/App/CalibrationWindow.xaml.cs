@@ -13,8 +13,9 @@ namespace SeekIRWin.App;
 /// «Стандартный» — локальные числовые критерии (стабилизация, ΔT ≥ 10 °C,
 /// проверка контакта ±2 °C), LLM не участвует; «С помощником LLM» — модель
 /// видит телеметрию (каждые 5 с) и выдаёт пошаговые указания — какое опорное
-/// тело, как навести, когда фиксировать; после фита проверяет адекватность
-/// результата (vision + числа). Указания дублируются баннером на термокадре.</summary>
+/// тело, как навести; в режиме «Авто» ПРЕДЛАГАЕТ точку и температуру, но
+/// фиксирует только оператор; после фита проверяет адекватность результата
+/// (vision + числа). Указания дублируются баннером на термокадре.</summary>
 public partial class CalibrationWindow : Window
 {
     public sealed record Snap(byte[] Png, string Facts, double SigCenter, double TCenter, bool Stable);
@@ -38,6 +39,8 @@ public partial class CalibrationWindow : Window
     {
         _main = main; _llm = llm;
         InitializeComponent();
+        // «телеметрия каждые 5 с» — таймер реально опрашивает модель (раньше Tick не был назначен)
+        _timer.Tick += (_, _) => Ask();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -98,8 +101,8 @@ public partial class CalibrationWindow : Window
         }
         TxtAlgoNote.Text =
             "Модель получает телеметрию каждые 5 с и подсказывает, что делать. «Авто» — модель " +
-            "сама фиксирует точки по типовым температурам (лёд 0 °C, кожа лба ~34 °C) и " +
-            "запускает фит; без «Авто» — фиксируете сами по её готовности.";
+            "ПРЕДЛАГАЕТ точку и её температуру (лёд 0 °C, кожа лба ~34 °C), но фиксируете вы " +
+            "кнопкой «Зафиксировать точку»; без «Авто» — фиксируете сами по её готовности.";
         BtnGrab.IsEnabled = true;
         _hist.Add(new LlmClient.Msg("system", Sys));
         _timer.Start();
@@ -156,15 +159,18 @@ public partial class CalibrationWindow : Window
                 _hist.Add(new LlmClient.Msg("assistant", a));
                 var av = ParseAuto(a);
                 TxtHint.Text = av.Hint;
-                TxtStatus.Text = $"Точек: {_pts.Count}/2. Действие модели: {av.Action}.";
                 if (av.Action == "grab" && av.TrueC is > -40 and < 120 && s.Stable && _pts.Count < 2)
                 {
-                    GrabPoint(s, av.TrueC.Value, "авто");
-                    if (_pts.Count == 2) { AutoFitAndCheck(); return; }
+                    // модель ПРЕДЛАГАЕТ точку, но калибровку фиксирует только оператор:
+                    // подставляем предложенное значение в поле и ждём явного нажатия кнопки
+                    TxtTrueC.Text = av.TrueC.Value.ToString("0.0", CultureInfo.InvariantCulture);
+                    TxtStatus.Text = $"Точек: {_pts.Count}/2. Модель предлагает {av.TrueC.Value:F1} °C — подтвердите «Зафиксировать точку».";
+                    _main.SetCalibHint(av.Hint + " Подтвердите точку кнопкой «Зафиксировать точку».");
                 }
                 else if (_pts.Count < 2)
                 {
                     _main.SetCalibHint(av.Hint);
+                    TxtStatus.Text = $"Точек: {_pts.Count}/2. Действие модели: {av.Action}.";
                 }
             }
             else
@@ -277,7 +283,7 @@ public partial class CalibrationWindow : Window
     private bool FitAndGate()
     {
         if (_pts.Count != 2) return false;
-        string err = _main.CalibFit(_pts[0].Sig, _pts[0].TrueC, _pts[1].Sig, _pts[1].TrueC);
+        string? err = _main.CalibFit(_pts[0].Sig, _pts[0].TrueC, _pts[1].Sig, _pts[1].TrueC);
         BtnFit.IsEnabled = false;
         LogLine(err == null ? "Планк-коэффициенты применены и сохранены (planck.calib)." : "Фит отклонён: " + err);
         if (err == null)
@@ -297,14 +303,6 @@ public partial class CalibrationWindow : Window
             return true;
         }
         return false;
-    }
-
-    /// <summary>Авто-режим: фит и проверка без нажатий.</summary>
-    private void AutoFitAndCheck()
-    {
-        if (!FitAndGate()) return;
-        _busy = false;           // освобождаем guard — CheckAsync запустится сам
-        CheckAsync();
     }
 
     // ---- проверка адекватности ----

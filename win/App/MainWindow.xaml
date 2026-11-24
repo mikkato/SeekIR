@@ -166,6 +166,7 @@
                     <TextBox x:Name="TxtIso" Text="30" Width="44" Height="26" FontSize="12"
                              Padding="7,1" Margin="6,0,0,0"
                              VerticalContentAlignment="Center" TextAlignment="Right"
+                             TextChanged="OnIsoText"
                              ToolTip="Порог изотермы, °C" />
                 </StackPanel>
                 <CheckBox x:Name="ChkMarks" Content="метки °C" FontSize="12" IsChecked="True"
@@ -207,8 +208,13 @@
                 <TextBlock x:Name="LbDT" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
                            Foreground="{DynamicResource CFgBrush}" Text="ΔT кадра: --" />
                 <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
-                <TextBlock Text="ЗОНЫ / ΔT" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
-                           Margin="0,0,0,2" />
+                <DockPanel LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Right" Text="очистить" FontSize="10" Cursor="Hand"
+                               Foreground="{DynamicResource CFgDimBrush}" MouseLeftButtonUp="OnZonesClear"
+                               ToolTip="Удалить все зоны (Ctrl+Del)" />
+                    <TextBlock Text="ЗОНЫ / ΔT" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                               Margin="0,0,0,2" />
+                </DockPanel>
                 <StackPanel x:Name="ZoneList" />
                 <Grid Margin="0,2,0,0">
                     <Grid.ColumnDefinitions>

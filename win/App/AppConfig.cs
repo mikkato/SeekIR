@@ -50,7 +50,7 @@ public sealed class AppConfig
                 return cfg;
             }
         }
-        catch { /* битый конфиг = дефолт */ }
+        catch (Exception ex) { Diag.Log("конфиг не загружен, берём дефолт: " + ex.Message); }
         return new AppConfig();
     }
 
@@ -76,7 +76,7 @@ public sealed class AppConfig
                 System.Security.Cryptography.DataProtectionScope.CurrentUser);
             return DpapiPrefix + Convert.ToBase64String(b);
         }
-        catch { return plain; }
+        catch (Exception ex) { Diag.Log("DPAPI Protect не удался, ключ сохранится открытым: " + ex.Message); return plain; }
     }
     private static string Unprotect(string stored)
     {
@@ -88,6 +88,6 @@ public sealed class AppConfig
                 System.Security.Cryptography.DataProtectionScope.CurrentUser);
             return System.Text.Encoding.UTF8.GetString(b);
         }
-        catch { return ""; }
+        catch (Exception ex) { Diag.Log("DPAPI Unprotect не удался (ключ утерян): " + ex.Message); return ""; }
     }
 }

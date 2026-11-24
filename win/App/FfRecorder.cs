@@ -1,12 +1,11 @@
 using System.Diagnostics;
-using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 
 namespace SeekIRWin.App;
 
-/// <summary>Запись видеопотока через pipe в ffmpeg (portable, LGPL).
+/// <summary>Запись видеопотока через pipe в ffmpeg (bundled-бинарник — см. лицензию).
 /// На входе — нативные RGB888 320x240; ffmpeg поворачивает (transpose=2,
 /// 90° против ч.с., как на экране), апскейлит x4 nearest и кодирует H.264 yuv420p.
 /// Запись не должна блокировать поток кадров: Write() только кладёт в очередь,
@@ -20,9 +19,10 @@ public sealed class FfRecorder : IDisposable
     private string _path = "";
     private BinaryWriter? _raw; // FW2 sidecar: сырой 16-битный сигнал, тот же порядок кадров
     private long _frames;
-    private volatile bool _done; // Write() после Stop/Dispose не трогаем
+    private volatile bool _done;       // Write() после Stop/Dispose не трогаем
+    private volatile bool _ffExited;   // кэш факта смерти ffmpeg (без HasExited на каждый кадр)
 
-    public bool IsRunning => !_done && _ff is { HasExited: false };
+    public bool IsRunning => !_done && !_ffExited && _ff is not null;
     public long Frames => Interlocked.Read(ref _frames);
 
     /// <summary>sidecarPath — необязательный .sig16 (LE ushort по кадрам, 320x240).</summary>
@@ -33,9 +33,11 @@ public sealed class FfRecorder : IDisposable
         if (!File.Exists(ff)) ff = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
         if (!File.Exists(ff)) return false;
         _path = outPath;
+        _ffExited = false;
         int fr = Math.Clamp((int)Math.Round(fps <= 0 ? 7 : fps), 1, 30);
         _ff = new Process
         {
+            EnableRaisingEvents = true,
             StartInfo = new ProcessStartInfo
             {
                 FileName = ff,
@@ -51,11 +53,12 @@ public sealed class FfRecorder : IDisposable
                 CreateNoWindow = true,
             },
         };
-        try { _ff.Start(); } catch { Dispose(); return false; }
+        _ff.Exited += (_, _) => _ffExited = true;
+        try { _ff.Start(); } catch (Exception ex) { Diag.Log("ffmpeg не стартовал: " + ex.Message); Dispose(); return false; }
         if (sidecarPath is not null)
         {
             try { _raw = new BinaryWriter(File.Create(sidecarPath)); }
-            catch { _raw = null; }
+            catch (Exception ex) { Diag.Log("sidecar не создан: " + ex.Message); _raw = null; }
         }
         _stdin = _ff.StandardInput.BaseStream;
         _ = _ff.StandardError.ReadToEndAsync(); // drain, не блокировать stderr
@@ -88,17 +91,17 @@ public sealed class FfRecorder : IDisposable
                 _stdin!.Write(rgb, 0, rgb.Length);
                 if (sig is not null && _raw is not null)
                 {
-                    Span<byte> b = stackalloc byte[2];
-                    foreach (ushort v in sig)
-                    {
-                        BinaryPrimitives.WriteUInt16LittleEndian(b, v);
-                        _raw.Write(b);
-                    }
+                    // sidecar: один буфер на весь кадр, а не 76 800 записей по 2 байта
+                    var buf = new byte[sig.Length * 2];
+                    Buffer.BlockCopy(sig, 0, buf, 0, buf.Length); // LE (x86/ARM64)
+                    _raw.Write(buf);
                 }
                 Interlocked.Increment(ref _frames);
             }
         }
         catch (IOException) { /* ffmpeg умер — молча выходим, Stop() зафиксирует */ }
+        catch (ObjectDisposedException) { /* Dispose во время чтения очереди — норм. выход */ }
+        catch (InvalidOperationException) { /* коллекция завершена во время перебора */ }
     }
 
     /// <summary>Остановка: закрываем stdin, ждём завершения кодирования (mp4 moov пишется в конце).</summary>
@@ -106,6 +109,7 @@ public sealed class FfRecorder : IDisposable
     {
         _done = true;
         if (_ff is null) return "";
+        string path;
         try
         {
             _q.CompleteAdding();
@@ -116,14 +120,17 @@ public sealed class FfRecorder : IDisposable
         }
         catch { }
         bool ok = _ff.HasExited && _ff.ExitCode == 0 && File.Exists(_path);
-        string p = ok ? _path : "";
+        path = ok ? _path : "";
         Dispose();
-        return p;
+        return path;
     }
 
     public void Dispose()
     {
         _done = true;
+        if (!_q.IsAddingCompleted) _q.CompleteAdding();
+        // даём писателю выйти до освобождения коллекции — иначе ObjectDisposedException
+        _writer?.Join(1000);
         try { if (_ff is { HasExited: false }) _ff.Kill(entireProcessTree: true); } catch { }
         _ff?.Dispose(); _ff = null; _stdin = null;
         try { _raw?.Flush(); _raw?.Dispose(); } catch { }

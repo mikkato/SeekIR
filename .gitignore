@@ -11,3 +11,4 @@ core/tests/out_c/
 core/tests/out_ref/
 
 win/App/ffmpeg/ffmpeg.exe
+dist/

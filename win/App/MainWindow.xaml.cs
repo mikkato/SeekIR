@@ -13,10 +13,10 @@ public partial class MainWindow : Window
 {
     private SeekCam _cam = new();
     private AppConfig _cfg = AppConfig.Load();
-    private SeekCam.Frame? _lastFrame;
+    private volatile SeekCam.Frame? _lastFrame;
     private WriteableBitmap? _bmp;
     private WriteableBitmap? _palBmp;
-    private bool _frozen;
+    private volatile bool _frozen;
     private Radiometry _radio = new();
     private readonly double[] _hist = new double[96];    // гистограмма счёт-сигнала
     private bool _histDrag;
@@ -48,8 +48,17 @@ public partial class MainWindow : Window
         RoiG.Visibility = _cfg.ShowRoi ? Visibility.Visible : Visibility.Collapsed;
         RebuildDeltaCombos();
         ApplyOverlayToggles();
+        RefreshIso();
         _cam.FrameArrived += OnFrame; // поток libusb-воркера
-        Closed += (_, _) => _cam.Dispose();
+        // при закрытии окна: остановить запись (иначе ffmpeg зависнет с открытым sidecar),
+        // остановить таймеры, затем камеру
+        Closed += (_, _) =>
+        {
+            _recTimer?.Stop();
+            _retry?.Stop();
+            try { _rec?.Stop(3000); } catch { }
+            _cam.Dispose();
+        };
         // автоподключение: тепловизор — основное устройство; ретрай 2 с, пока открыто окно
         Loaded += (_, _) => { WindowTheme.ApplyAll(Themes.IsDark); TryConnect(); StartRetryTimer(); };
     }
@@ -165,6 +174,8 @@ public partial class MainWindow : Window
     {
         if (_calibWin is { IsLoaded: true }) { _calibWin.Activate(); return; }
         _calibWin = new CalibrationWindow(this, new LlmClient(_cfg.Llm)) { Owner = this };
+        // при закрытии окна — освободить ссылку и спрятать баннер указаний
+        _calibWin.Closed += (_, _) => { _calibWin = null; SetCalibHint(""); };
         _calibWin.Show();
     }
 
@@ -254,52 +265,73 @@ public partial class MainWindow : Window
         return Path.Combine(dir, "gain.cache");
     }
 
+    // кэш порога изотермы и переиспользуемый BGR32-буфер — не парсить/не аллоцировать на каждый кадр
+    private double _isoT = double.NaN;
+    private byte[]? _bgr32;
+    private volatile bool _renderPending; // очередь отрисовки ограничена одним кадром
+    private DateTime _statT = DateTime.MinValue; // гейт статус-строки/шкалы (~150 мс)
+    private DateTime _histT = DateTime.MinValue; // гейт гистограммы (~100 мс)
+
     private void OnFrame(SeekCam.Frame f)
     {
         // снимок берёт raw-сигнал последнего ПОКАЗАННОГО кадра (на паузе — замороженного)
         if (!_frozen) _lastFrame = f;
         _rec?.Write(f.Rgb, f.Signal); // запись живого потока (нативная ориентация; ffmpeg повернёт)
+        // коалесценция кадров: если рендер ещё в очереди/идёт, промежуточные кадры дропаем —
+        // очередь Dispatcher не растёт, UI не отстаёт на накопленных кадрах.
+        if (_frozen || _renderPending) return;
+        _renderPending = true;
         Dispatcher.BeginInvoke(() =>
         {
-            if (_frozen) return;
-            if (_bmp is null)
+            try { if (!_frozen) RenderFrame(f); }
+            finally { _renderPending = false; }
+        });
+    }
+
+    private void RenderFrame(SeekCam.Frame f)
+    {
+        if (_bmp is null)
+        {
+            _bmp = new WriteableBitmap(SeekConst.W, SeekConst.H, 96, 96,
+                PixelFormats.Bgr32, null);
+            Img.Source = _bmp;
+        }
+        // RGB888 -> BGR32 (+ изотерма: подсветка пикселей теплее порога)
+        bool iso = ChkIso.IsChecked == true && !double.IsNaN(_isoT);
+        _bgr32 ??= new byte[SeekConst.W * SeekConst.H * 4];
+        var px = _bgr32;
+        for (int i = 0; i < SeekConst.W * SeekConst.H; i++)
+        {
+            if (iso && f.Temp[i] >= _isoT)
             {
-                _bmp = new WriteableBitmap(SeekConst.W, SeekConst.H, 96, 96,
-                    PixelFormats.Bgr32, null);
-                Img.Source = _bmp;
+                px[i * 4 + 0] = 0; px[i * 4 + 1] = 230; px[i * 4 + 2] = 230; // жёлтый (BGR)
+                continue;
             }
-            // RGB888 -> BGR32 (+ изотерма: подсветка пикселей теплее порога)
-            double isoT = double.NaN;
-            if (ChkIso.IsChecked == true)
-                double.TryParse(TxtIso.Text.Replace(',', '.'),
-                    System.Globalization.CultureInfo.InvariantCulture, out isoT);
-            bool iso = !double.IsNaN(isoT);
-            var px = new byte[SeekConst.W * SeekConst.H * 4];
-            for (int i = 0; i < SeekConst.W * SeekConst.H; i++)
-            {
-                if (iso && f.Temp[i] >= isoT)
-                {
-                    px[i * 4 + 0] = 0; px[i * 4 + 1] = 230; px[i * 4 + 2] = 230; // жёлтый (BGR)
-                    continue;
-                }
-                px[i * 4 + 0] = f.Rgb[i * 3 + 2];
-                px[i * 4 + 1] = f.Rgb[i * 3 + 1];
-                px[i * 4 + 2] = f.Rgb[i * 3 + 0];
-            }
-            _bmp.WritePixels(new Int32Rect(0, 0, SeekConst.W, SeekConst.H), px,
-                             SeekConst.W * 4, 0);
-            int mid = SeekConst.W * SeekConst.H / 2;
+            px[i * 4 + 0] = f.Rgb[i * 3 + 2];
+            px[i * 4 + 1] = f.Rgb[i * 3 + 1];
+            px[i * 4 + 2] = f.Rgb[i * 3 + 0];
+        }
+        _bmp.WritePixels(new Int32Rect(0, 0, SeekConst.W, SeekConst.H), px,
+                         SeekConst.W * 4, 0);
+        int mid = SeekConst.W * SeekConst.H / 2;
+        if ((DateTime.Now - _statT).TotalMilliseconds >= 150)
+        {
+            _statT = DateTime.Now;
             TxtStatus.Text =
                 $"скорость {f.Fps:F1} к/с · кадров {f.Frames} · шторка {f.Ffs} · ошибок {f.Errors} · " +
                 $"переподключений {f.Resyncs} · шкала {f.Lo:F0}…{f.Hi:F0} · центр {f.Temp[mid]:F1} °C" +
                 (f.TDevC > 0 ? $" · FPA {f.TDevC:F1} °C" : "");
             UpdateScale(f.Lo, f.Hi);
-            UpdateMaxMarker(f);
-            UpdateProbe(f);
-            if (ChkRoi.IsChecked == true && _zones.Count > 0) UpdateRois(f);
+        }
+        UpdateMaxMarker(f);
+        UpdateProbe(f);
+        if (ChkRoi.IsChecked == true && _zones.Count > 0) UpdateRois(f);
+        if ((DateTime.Now - _histT).TotalMilliseconds >= 100)
+        {
+            _histT = DateTime.Now;
             UpdateHistogram(f);
-            UpdateSideInfo(f);
-        });
+        }
+        UpdateSideInfo(f);
     }
 
     /// <summary>Левая служебная панель: параметры съёмки и измерения (OSD-спек P1:
@@ -323,11 +355,7 @@ public partial class MainWindow : Window
         else
             LbSpanC.Text = "шкала: авто";
         if (ChkIso.IsChecked == true)
-        {
-            double.TryParse(TxtIso.Text.Replace(',', '.'),
-                System.Globalization.CultureInfo.InvariantCulture, out double isoT);
-            LbIsoC.Text = double.IsNaN(isoT) ? "изотерма: ?" : $"изотерма ≥ {isoT:F1} °C";
-        }
+            LbIsoC.Text = double.IsNaN(_isoT) ? "изотерма: ?" : $"изотерма ≥ {_isoT:F1} °C";
         else LbIsoC.Text = "изотерма: выкл";
         LbDenC.Text = $"сглаживание: {SldSmooth.Value:F2}";
         if (_radio.Ready)
@@ -399,6 +427,7 @@ public partial class MainWindow : Window
     }
     private void UpdateMaxMarker(SeekCam.Frame f)
     {
+        if (ChkMarks.IsChecked != true) return; // метки скрыты — интеграл/поиск максимума не нужны
         var t = f.Temp;
         BuildIntegral(t);
 
@@ -495,7 +524,7 @@ public partial class MainWindow : Window
     {
         // столбец 1x256 по LUT ядра: пересчёт серого -> RGB через нативную LUT нельзя
         // напрямую (LUT внутренняя), рисуем градиент приближённо по 256 gray-уровням
-        // из того же кадра нельзя — строим эталонный铁 LUT-срез программно в UI:
+        // из того же кадра нельзя — строим эталонный LUT-срез программно в UI:
         // для v0 берём ironbow-подобный градиент; точная синхронизация с ядром — этап W5.
         var w = 1; var h = 256;
         var px = new byte[w * h * 4];
@@ -566,10 +595,26 @@ public partial class MainWindow : Window
     }
 
     // ---- FW2: запись видео (ffmpeg pipe -> H.264 mp4) ----
-    private FfRecorder? _rec;
+    private volatile FfRecorder? _rec;
     private System.Windows.Threading.DispatcherTimer? _recTimer;
     private SnapshotMeta? _recMeta;
     private string _recDir = "", _recBase = "";
+
+    // единая фабрика метаданных (снимок и запись используют один и тот же набор полей)
+    private SnapshotMeta BuildMeta(SeekCam.Frame f, double fps) => new SnapshotMeta
+    {
+        Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+        Palette = CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "ironbow",
+        SpanLo = f.Lo, SpanHi = f.Hi, SpanAuto = ChkAutoSpan.IsChecked == true,
+        Fps = fps, CenterCelsius = f.Temp[SeekConst.W * SeekConst.H / 2],
+        MeanSignal = f.MeanSignal,
+        Smooth = (float)SldSmooth.Value, Motion = SeekConst.Motion, Spatial = SeekConst.Spatial,
+        Hotmap = ResolveHotmap() ?? "",
+        Emissivity = _cfg.Scene.Emissivity,
+        TReflC = _cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC,
+        TAtmC = _cfg.Scene.TAtmC, DistanceM = _cfg.Scene.DistanceM,
+        RelHumidity = _cfg.Scene.RelHumidity,
+    };
 
     private void OnRec(object sender, RoutedEventArgs e)
     {
@@ -596,7 +641,7 @@ public partial class MainWindow : Window
                                 System.Text.Json.JsonSerializer.Serialize(_recMeta,
                                     new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
                         }
-                        catch { }
+                        catch (Exception ex) { Diag.Log("meta.json записи не сохранился: " + ex.Message); }
                         _recMeta = null;
                     }
                     TxtStatus.Text = path.Length > 0 ? $"видео: {path}" : "видео: ошибка кодирования";
@@ -614,10 +659,13 @@ public partial class MainWindow : Window
             if (drive.AvailableFreeSpace < 1L << 30)
             { TxtStatus.Text = "запись: свободно < 1 ГБ — освободите место"; return; }
         }
-        catch { }
+        catch (Exception ex) { Diag.Log("проверка свободного места не удалась: " + ex.Message); }
         string baseName = $"IR_{DateTime.Now:yyyyMMdd_HHmmss}";
         string outPath = Path.Combine(dir, baseName + ".mp4");
         double fps = Math.Clamp(_lastFrame.Fps <= 0 ? 7 : _lastFrame.Fps, 1, 30);
+        // остатки прежней записи (ffmpeg мог упасть сам): освободить до создания новой
+        _rec?.Dispose();
+        _recTimer?.Stop();
         _rec = new FfRecorder();
         // sidecar радиоданных FW2: raw-сигнал LE + meta (как у снимка)
         string sidecar = Path.Combine(dir, baseName + ".sig16");
@@ -626,26 +674,26 @@ public partial class MainWindow : Window
             TxtStatus.Text = "ffmpeg.exe не найден рядом с приложением";
             _rec = null; return;
         }
-        _recMeta = new SnapshotMeta
-        {
-            Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-            Palette = CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "ironbow",
-            SpanLo = _lastFrame.Lo, SpanHi = _lastFrame.Hi, SpanAuto = ChkAutoSpan.IsChecked == true,
-            Fps = fps, CenterCelsius = _lastFrame.Temp[SeekConst.W * SeekConst.H / 2],
-            MeanSignal = _lastFrame.MeanSignal,
-            Smooth = (float)SldSmooth.Value, Motion = SeekConst.Motion, Spatial = SeekConst.Spatial,
-            Hotmap = ResolveHotmap() ?? "",
-            Emissivity = _cfg.Scene.Emissivity,
-            TReflC = _cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC,
-            TAtmC = _cfg.Scene.TAtmC, DistanceM = _cfg.Scene.DistanceM,
-            RelHumidity = _cfg.Scene.RelHumidity,
-        };
+        _recMeta = BuildMeta(_lastFrame, fps);
         _recDir = dir; _recBase = baseName;
         RecDot.Fill = (Brush)FindResource("CRecBrush");
         BtnRec.ToolTip = "Остановить запись";
         _recTimer = new System.Windows.Threading.DispatcherTimer
         { Interval = TimeSpan.FromMilliseconds(500) };
-        _recTimer.Tick += (_, _) => TxtRec.Text = $"{_rec!.Frames / fps:F0} c";
+        _recTimer.Tick += (_, _) =>
+        {
+            if (_rec is not { IsRunning: true })
+            {
+                // ffmpeg упал/завершился сам — свернуть запись, не оставляя висящий процесс
+                _rec?.Dispose(); _rec = null;
+                _recTimer?.Stop();
+                RecDot.Fill = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0x44, 0x44));
+                TxtRec.Text = "";
+                TxtStatus.Text = "видео: запись оборвалась (ffmpeg завершился)";
+                return;
+            }
+            TxtRec.Text = $"{_rec.Frames / fps:F0} c";
+        };
         _recTimer.Start();
         TxtStatus.Text = $"запись: {outPath}";
     }
@@ -656,31 +704,23 @@ public partial class MainWindow : Window
         _cam.SetPalette(Palettes[CmbPalette.SelectedIndex].Id);
         BuildPaletteStrip(Palettes[CmbPalette.SelectedIndex].Id);
         _cfg.Palette = Palettes[CmbPalette.SelectedIndex].Name;
-        try { _cfg.Save(); } catch { }
+        try { _cfg.Save(); } catch (Exception ex) { Diag.Log("конфиг не сохранился: " + ex.Message); }
     }
 
-    private void OnAutoSpan(object sender, RoutedEventArgs e) =>
-        _cam.SetSpanManual(ChkAutoSpan.IsChecked != true, 20, 30);
+    private void OnAutoSpan(object sender, RoutedEventArgs e)
+    {
+        // при отключении авто берём текущий span кадра, а не жёсткие 20..30
+        double lo = double.IsNaN(_spanLo) ? 0 : _spanLo;
+        double hi = double.IsNaN(_spanHi) ? 65535 : _spanHi;
+        _cam.SetSpanManual(ChkAutoSpan.IsChecked != true, lo, hi);
+    }
 
     private void OnSnap(object sender, RoutedEventArgs e)
     {
         var f = _lastFrame;
         if (_bmp is null || f is null) return;
         string name = $"IR_{DateTime.Now:yyyyMMdd_HHmmss}";
-        var meta = new SnapshotMeta
-        {
-            Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-            Palette = CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "ironbow",
-            SpanLo = f.Lo, SpanHi = f.Hi, SpanAuto = ChkAutoSpan.IsChecked == true,
-            Fps = f.Fps, CenterCelsius = f.Temp[SeekConst.W * SeekConst.H / 2],
-            MeanSignal = f.MeanSignal,
-            Smooth = (float)SldSmooth.Value, Motion = SeekConst.Motion, Spatial = SeekConst.Spatial,
-            Hotmap = ResolveHotmap() ?? "",
-            Emissivity = _cfg.Scene.Emissivity,
-            TReflC = _cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC,
-            TAtmC = _cfg.Scene.TAtmC, DistanceM = _cfg.Scene.DistanceM,
-            RelHumidity = _cfg.Scene.RelHumidity,
-        };
+        var meta = BuildMeta(f, f.Fps);
         string dir = Gallery.Save(name, f.Signal, Exports.Png(_bmp), meta);
         TxtStatus.Text = $"снимок: {Path.GetFileName(dir)} (raw+png+meta)";
     }
@@ -693,7 +733,7 @@ public partial class MainWindow : Window
         else Exports.ExportDialog(_bmp, baseName, jpeg: false);
     }
 
-    private HotmapBuilder? _hm;
+    private volatile HotmapBuilder? _hm;
     private string _hotmapResult = "";
     private void OnHotmap(object sender, RoutedEventArgs e)
     {
@@ -941,6 +981,7 @@ public partial class MainWindow : Window
         public Border Badge = null!;
         public TextBlock BadgeTxt = null!;
         public TextBlock Row = null!;        // строка статистики в панели
+        public System.Windows.Controls.Panel RowBox = null!; // строка + кнопка «×»
         public double Mean = double.NaN;
     }
 
@@ -1017,12 +1058,20 @@ public partial class MainWindow : Window
                 Math.Max(_roiAx, x1), Math.Max(_roiAy, y1));
     }
 
+    // уникальная метка зоны: A..Z, затем AA, AB.. (после 26 зон буквы не повторяются)
+    private static string ZoneLabel(int n)
+    {
+        var r = new System.Text.StringBuilder();
+        for (n++; n > 0; n = (n - 1) / 26) r.Insert(0, (char)('A' + (n - 1) % 26));
+        return r.ToString();
+    }
+
     private void AddZone(bool ellipse, double x0, double y0, double x1, double y1)
     {
         var z = new Zone
         {
             Id = _zoneSeq,
-            Letter = ((char)('A' + _zoneSeq % 26)).ToString(),
+            Letter = ZoneLabel(_zoneSeq),
             Ellipse = ellipse,
             X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
         };
@@ -1060,7 +1109,23 @@ public partial class MainWindow : Window
             Cursor = Cursors.Hand,
         };
         z.Row.MouseLeftButtonUp += (_, _) => SelectZone(z);
-        ZoneList.Children.Add(z.Row);
+        var del = new TextBlock
+        {
+            Text = "×",
+            FontSize = 12,
+            Cursor = Cursors.Hand,
+            Foreground = (Brush)FindResource("CFgDimBrush"),
+            Margin = new Thickness(4, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "Удалить зону (Del)",
+        };
+        del.MouseLeftButtonUp += (_, ev) => { SelectZone(z); DeleteSelectedZone(); ev.Handled = true; };
+        var box = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(del, Dock.Right);
+        box.Children.Add(del);
+        box.Children.Add(z.Row);
+        z.RowBox = box;
+        ZoneList.Children.Add(box);
         _zones.Add(z);
         SelectZone(z);
         RebuildDeltaCombos();
@@ -1083,12 +1148,29 @@ public partial class MainWindow : Window
         if (_zoneSel is null) return;
         RoiG.Children.Remove(_zoneSel.Fig);
         RoiG.Children.Remove(_zoneSel.Badge);
-        ZoneList.Children.Remove(_zoneSel.Row);
+        ZoneList.Children.Remove(_zoneSel.RowBox);
         _zones.Remove(_zoneSel);
         _zoneSel = _zones.Count > 0 ? _zones[^1] : null;
         SelectZone(_zoneSel);
         RebuildDeltaCombos();
+        UpdateDelta();
     }
+
+    private void ClearZones()
+    {
+        foreach (var z in _zones)
+        {
+            RoiG.Children.Remove(z.Fig);
+            RoiG.Children.Remove(z.Badge);
+            ZoneList.Children.Remove(z.RowBox);
+        }
+        _zones.Clear();
+        _zoneSel = null;
+        RebuildDeltaCombos();
+        UpdateDelta();
+    }
+
+    private void OnZonesClear(object sender, MouseButtonEventArgs e) => ClearZones();
 
     /// <summary>Мин/макс/средн/СКО по маске зоны на радиометрическом потоке.</summary>
     private void UpdateRois(SeekCam.Frame f)
@@ -1169,14 +1251,29 @@ public partial class MainWindow : Window
         if (f is null) return false;
         switch (sel)
         {
-            case "макс кадра": v = f.Temp.Max(); return true;
-            case "мин кадра": v = f.Temp.Min(); return true;
+            case "макс кадра": v = ValidMax(f.Temp); return !double.IsNaN(v);
+            case "мин кадра": v = ValidMin(f.Temp); return !double.IsNaN(v);
             case "центр": v = f.Temp[f.Temp.Length / 2]; return true;
             case "опора":
                 return double.TryParse(TxtRef.Text.Replace(',', '.'),
                     System.Globalization.CultureInfo.InvariantCulture, out v);
         }
         return false;
+    }
+
+    // «мин/макс кадра» без заглушек ядра (-273.15) — иначе ΔT съедет на -273 °C
+    private static double ValidMin(double[] t)
+    {
+        double mn = double.MaxValue;
+        foreach (var v in t) if (v >= -200 && v < mn) mn = v;
+        return mn == double.MaxValue ? double.NaN : mn;
+    }
+
+    private static double ValidMax(double[] t)
+    {
+        double mx = double.MinValue;
+        foreach (var v in t) if (v >= -200 && v > mx) mx = v;
+        return mx == double.MinValue ? double.NaN : mx;
     }
 
     private void UpdateDelta()
@@ -1198,7 +1295,13 @@ public partial class MainWindow : Window
     private void OnRefText(object sender, TextChangedEventArgs e) => UpdateDelta();
 
     // ---- горячие клавиши ----
-    private void OnIso(object sender, RoutedEventArgs e) { /* читается в OnFrame */ }
+    private void OnIso(object sender, RoutedEventArgs e) => RefreshIso();
+
+    private void OnIsoText(object sender, TextChangedEventArgs e) => RefreshIso();
+
+    private void RefreshIso() =>
+        _isoT = double.TryParse(TxtIso.Text.Replace(',', '.'),
+            System.Globalization.CultureInfo.InvariantCulture, out double v) ? v : double.NaN;
 
     private void OnGallery(object sender, RoutedEventArgs e)
     {
@@ -1212,7 +1315,7 @@ public partial class MainWindow : Window
 
     private void OnHotKey(object sender, KeyEventArgs e)
     {
-        if (Keyboard.FocusedElement is TextBox) return;
+        if (Keyboard.FocusedElement is TextBox or PasswordBox or ComboBox or Slider or Button) return;
         switch (e.Key)
         {
             case Key.Space:
@@ -1224,6 +1327,8 @@ public partial class MainWindow : Window
                 OnCalib(this, new RoutedEventArgs()); e.Handled = true; break;
             case Key.R when BtnReport.IsEnabled:
                 OnReport(this, new RoutedEventArgs()); e.Handled = true; break;
+            case Key.Delete when Keyboard.Modifiers.HasFlag(ModifierKeys.Control):
+                ClearZones(); e.Handled = true; break;
             case Key.Delete:
                 DeleteSelectedZone(); e.Handled = true; break;
             case Key.Escape:

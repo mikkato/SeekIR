@@ -147,7 +147,7 @@ public partial class ReportWindow : Window
     private async void OnSend(object sender, RoutedEventArgs e) => await Send();
     private void OnKey(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key == System.Windows.Input.Key.Enter && !TxtInput.Text.Contains('\n')) { Send(); e.Handled = true; }
+        if (e.Key == System.Windows.Input.Key.Enter && !TxtInput.Text.Contains('\n')) { _ = Send(); e.Handled = true; }
     }
 
     private async Task Send()

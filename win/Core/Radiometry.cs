@@ -1,6 +1,4 @@
-using SeekIRWin.Core;
-
-namespace SeekIRWin.App;
+namespace SeekIRWin.Core;
 
 /// <summary>Радиометрия «обратно»: счёт-сигнал ↔ °C по тем же константам,
 /// что C-ядро (core/src/radiometric.c, float64; экспоненты libm vs .NET

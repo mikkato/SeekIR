@@ -29,18 +29,30 @@ public sealed class SeekCam : IDisposable
         return _h != IntPtr.Zero;
     }
 
+    private long _cbErrors;
+    /// <summary>Счётчик ошибок маршалинга кадра (битый/пустой колбэк) — не роняем процесс.</summary>
+    public long CallbackErrors => Interlocked.Read(ref _cbErrors);
+
     private void OnNativeFrame(IntPtr user, IntPtr framePtr)
     {
-        var f = Marshal.PtrToStructure<SkcapFrame>(framePtr);
-        int px = SeekConst.W * SeekConst.H;
-        var rgb = new byte[px * 3];
-        var temp = new double[px];
-        var sig = new ushort[px];
-        Marshal.Copy(f.Rgb, rgb, 0, rgb.Length);
-        Marshal.Copy(f.Temp, temp, 0, px);
-        unsafe { fixed (ushort* d = sig) Buffer.MemoryCopy((void*)f.Signal, d, px * 2, px * 2); }
-        FrameArrived?.Invoke(new Frame(rgb, temp, sig, f.Lo, f.Hi, f.MeanSignal, f.Fps, f.TDevC,
-                                       f.Frames, f.Ffs, f.Errors, f.Resyncs));
+        try
+        {
+            var f = Marshal.PtrToStructure<SkcapFrame>(framePtr);
+            int px = SeekConst.W * SeekConst.H;
+            var rgb = new byte[px * 3];
+            var temp = new double[px];
+            var sig = new ushort[px];
+            Marshal.Copy(f.Rgb, rgb, 0, rgb.Length);
+            Marshal.Copy(f.Temp, temp, 0, px);
+            unsafe { fixed (ushort* d = sig) Buffer.MemoryCopy((void*)f.Signal, d, px * 2, px * 2); }
+            FrameArrived?.Invoke(new Frame(rgb, temp, sig, f.Lo, f.Hi, f.MeanSignal, f.Fps, f.TDevC,
+                                           f.Frames, f.Ffs, f.Errors, f.Resyncs));
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Increment(ref _cbErrors);
+            System.Diagnostics.Trace.WriteLine("SeekCam.OnNativeFrame: " + ex);
+        }
     }
 
     public void SetPalette(int pal) => Native.SetPalette(_h, pal);
@@ -53,7 +65,7 @@ public sealed class SeekCam : IDisposable
     public SkPlanck PlanckGet() { Native.PlanckGet(_h, out var p); return p; }
     public bool PlanckFit(double s1, double c1, double s2, double c2) =>
         Native.PlanckFit(_h, s1, c1, s2, c2);
-    public int PlanckSave(string path) => Native.PlanckSave(_h, Native.Utf8Z(path));
+    public int PlanckSave(string path) => Native.PlanckSave(_h, Native.Utf8Z(path)!);
     public void SetDumpDir(string? dir) => Native.DumpDir(_h, Native.Utf8Z(dir));
     public void SetGainPath(string? path) => Native.GainPath(_h, Native.Utf8Z(path));
 
@@ -64,10 +76,18 @@ public sealed class SeekCam : IDisposable
         if (onFf is null) { Native.SetFfCb(_h, null!, IntPtr.Zero); _ffKeep = null; return; }
         _ffKeep = (user, framePtr) =>
         {
-            var f = Marshal.PtrToStructure<SkcapFrame>(framePtr);
-            var sig = new ushort[SeekConst.W * SeekConst.H];
-            unsafe { fixed (ushort* d = sig) Buffer.MemoryCopy((void*)f.Signal, d, sig.Length * 2, sig.Length * 2); }
-            onFf(sig);
+            try
+            {
+                var f = Marshal.PtrToStructure<SkcapFrame>(framePtr);
+                var sig = new ushort[SeekConst.W * SeekConst.H];
+                unsafe { fixed (ushort* d = sig) Buffer.MemoryCopy((void*)f.Signal, d, sig.Length * 2, sig.Length * 2); }
+                onFf(sig);
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _cbErrors);
+                System.Diagnostics.Trace.WriteLine("SeekCam.FF callback: " + ex);
+            }
         };
         Native.SetFfCb(_h, _ffKeep, IntPtr.Zero);
     }
