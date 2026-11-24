@@ -12,3 +12,4 @@ core/tests/out_ref/
 
 win/App/ffmpeg/ffmpeg.exe
 dist/
+win/App/publish/
