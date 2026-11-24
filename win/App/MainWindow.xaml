@@ -6,6 +6,7 @@
         xmlns:local="clr-namespace:SeekIRWin.App"
         mc:Ignorable="d"
         Title="Термография" Width="1100" Height="760" MinWidth="900" MinHeight="600"
+        Icon="pack://application:,,,/app.ico"
         PreviewKeyDown="OnHotKey" Focusable="True"
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
@@ -67,9 +68,14 @@
                     <Button x:Name="BtnExportPng" Width="40" Height="22" FontSize="10" Content="PNG"
                             IsEnabled="False" Click="OnExport" ToolTip="Сохранить кадр в PNG" />
                     <Separator Width="8" Background="Transparent" />
-                    <Button x:Name="BtnRec" Width="28" IsEnabled="False" Click="OnRec" Padding="0"
+                    <Button x:Name="BtnRec" Width="54" Height="22" IsEnabled="False" Click="OnRec" Padding="0"
                             ToolTip="Запись видео MP4 + радиометрический sidecar">
-                        <Path x:Name="RecIco" Style="{StaticResource IcoFill}" Data="{StaticResource IcoRecord}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Ellipse x:Name="RecDot" Width="8" Height="8" VerticalAlignment="Center"
+                                     Fill="#55FF4444" />
+                            <TextBlock Text="REC" FontSize="10" FontWeight="SemiBold" Margin="4,0,0,0"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
                     </Button>
                     <TextBlock x:Name="TxtRec" Text="" Width="46" VerticalAlignment="Center"
                                FontSize="12" FontFamily="Consolas"

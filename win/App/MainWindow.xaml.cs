@@ -256,8 +256,8 @@ public partial class MainWindow : Window
                              SeekConst.W * 4, 0);
             int mid = SeekConst.W * SeekConst.H / 2;
             TxtStatus.Text =
-                $"{f.Fps,4:F1} к/с  кадр {f.Frames}  FF {f.Ffs}  err {f.Errors}  recon {f.Resyncs}  " +
-                $"span {f.Lo:F0}..{f.Hi:F0}  центр {f.Temp[mid]:F1} °C";
+                $"скорость {f.Fps:F1} к/с · кадров {f.Frames} · шторка {f.Ffs} · ошибок {f.Errors} · " +
+                $"переподключений {f.Resyncs} · шкала {f.Lo:F0}…{f.Hi:F0} · центр {f.Temp[mid]:F1} °C";
             UpdateScale(f.Lo, f.Hi);
             UpdateMaxMarker(f);
             UpdateProbe(f);
@@ -548,7 +548,8 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(() =>
                 {
                     _rec = null; _recTimer?.Stop();
-                    RecIco.Data = (Geometry)FindResource("IcoRecord");
+                    RecDot.Fill = (Brush)new SolidColorBrush(
+                        System.Windows.Media.Color.FromArgb(0x55, 0xFF, 0x44, 0x44));
                     BtnRec.ToolTip = "Запись видео MP4 + радиометрический sidecar";
                     TxtRec.Text = ""; BtnRec.IsEnabled = _cam.IsOpen;
                     if (path.Length > 0 && _recMeta is not null)
@@ -604,8 +605,7 @@ public partial class MainWindow : Window
             RelHumidity = _cfg.Scene.RelHumidity,
         };
         _recDir = dir; _recBase = baseName;
-        RecIco.Data = (Geometry)FindResource("IcoStop");
-        RecIco.Fill = (Brush)FindResource("CRecBrush");
+        RecDot.Fill = (Brush)FindResource("CRecBrush");
         BtnRec.ToolTip = "Остановить запись";
         _recTimer = new System.Windows.Threading.DispatcherTimer
         { Interval = TimeSpan.FromMilliseconds(500) };
@@ -667,7 +667,7 @@ public partial class MainWindow : Window
             // повторное нажатие — завершить раньше; минимум 30 FF, иначе σ-оценка
             // зашумлена и карта недооценивает битые пиксели (проверено: 14 FF -> 0.10%)
             if (_hm.Collected >= 30) { FinishHotmap(_hm); }
-            else { TxtStatus.Text = $"карта шума: рано — {_hm.Collected}/30 FF (повторное нажатие при ≥30)"; }
+            else { TxtStatus.Text = $"карта шума: рано — шторка {_hm.Collected}/30 (повторное нажатие при ≥30)"; }
             return;
         }
         _hm = new HotmapBuilder(60);

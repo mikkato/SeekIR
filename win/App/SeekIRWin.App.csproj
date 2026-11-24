@@ -12,7 +12,13 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>SeekIRWin.App</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- иконка: тепловое ядро + кольцо-мишень (заголовок всех окон + exe) -->
+    <Resource Include="app.ico" />
+  </ItemGroup>
 
   <!-- нативные DLL рядом с exe (собраны core/Makefile.win -> core/build/win) -->
   <ItemGroup>
