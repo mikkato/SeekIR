@@ -55,8 +55,12 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
-                                          VerticalAlignment="Center" />
+                            <!-- отвязка от нижнего колонтитула: паддинг только слева,
+                                 вертикаль задаётся VerticalContentAlignment -->
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Margin="7,0,7,0" Padding="0,4,0,4"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          VerticalContentAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsKeyboardFocused" Value="True">
