@@ -27,30 +27,92 @@ public partial class ReportWindow : Window
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
         _llm = llm; _png = png; _facts = facts; _shotAt = DateTime.Now;
         InitializeComponent();
+        TxtModel.Text = llm.Model;
         if (!_llm.Enabled)
             TxtStatus.Text = "LLM не настроен (config.json → llm.base_url)";
         BtnSend.IsEnabled = _llm.Enabled;
+        AddFrameThumb();
         TxtInput.Focus();
     }
 
+    /// <summary>Миниатюра термограммы сверху ленты — общий контекст интервью.</summary>
+    private void AddFrameThumb()
+    {
+        try
+        {
+            var img = new System.Windows.Controls.Image
+            {
+                Width = 160,
+                Stretch = Stretch.Uniform,
+                Source = Exports.BitmapFromPng(_png),
+            };
+            var b = new Border
+            {
+                BorderBrush = (Brush)FindResource("CBorderBrush"),
+                BorderThickness = new Thickness(1),
+                Background = (Brush)FindResource("CBgBrush"),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 10),
+                Padding = new Thickness(2),
+                Child = img,
+            };
+            Chat.Children.Add(b);
+        }
+        catch { /* миниатюра декоративная */ }
+    }
+
+    /// <summary>Пузырь сообщения: пользователь — справа, акцентная рамка;
+    /// агент — слева, панельная заливка. Плоско: заливка + 1px граница.</summary>
     private void Append(string who, string text)
     {
-        Chat.Items.Add(new TextBlock
+        bool user = who == "Вы";
+        var txt = new TextBlock
         {
-            Text = who + ": " + text,
+            Text = text,
             TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 3, 0, 0),
-            Foreground = (Brush)FindResource(who == "Вы" ? "CFgBrush" : "CAccentBrush"),
-        });
+            FontSize = 12.5,
+            Foreground = (Brush)FindResource("CFgBrush"),
+        };
+        var tag = new TextBlock
+        {
+            Text = user ? $"Вы · {_shotAt:HH:mm}" : "",
+            FontSize = 10,
+            Foreground = (Brush)FindResource("CFgDimBrush"),
+            Margin = new Thickness(2, 0, 2, 2),
+        };
+        if (!user) tag.Text = "Агент · " + DateTime.Now.ToString("HH:mm");
+        var stack = new StackPanel { Children = { tag, txt } };
+        var bubble = new Border
+        {
+            Child = stack,
+            Padding = new Thickness(10, 6, 10, 8),
+            Margin = new Thickness(user ? 48 : 0, 4, user ? 0 : 48, 4),
+            MaxWidth = 460,
+            HorizontalAlignment = user ? System.Windows.HorizontalAlignment.Right
+                                       : System.Windows.HorizontalAlignment.Left,
+            Background = (Brush)FindResource(user ? "CUserBgBrush" : "CPanelBrush"),
+            BorderBrush = (Brush)FindResource(user ? "CUserBdBrush" : "CBorderBrush"),
+            BorderThickness = new Thickness(1),
+        };
+        Chat.Children.Add(bubble);
         ChatScroll.ScrollToEnd();
     }
 
-    /// <summary>Системная роль: эксперт по температурному контролю.</summary>
+    /// <summary>Системная роль: эксперт по температурному контролю.
+    /// Цветовая схема НЕ фиксируется — палитра передаётся в телеметрии («Палитра: …»)
+    /// и описания соответствия цвета температуре берутся оттуда.</summary>
     public const string SystemPrompt =
         "Ты — эксперт по температурному контролю и инфракрасной термографии с опытом " +
         "энергоаудитов и диагностики промышленного оборудования (ГОСТ Р 55472, серия ISO 6781). " +
-        "Ты работаешь с термограммой тепловизора Seek CompactPRO (320x240, палитра ironbow: " +
-        "холодное — фиолетово-синее, горячее — жёлто-белое) и радиометрической телеметрией съёмки. " +
+        "Ты работаешь с термограммой тепловизора Seek CompactPRO (320x240) и радиометрической " +
+        "телеметрией съёмки. Цветовая палитра задана в телеметрии полем «Палитра: …». " +
+        "Соответствие цвета температуре по ядру: ironbow/ironbow2 — холод тёмно-сине-фиолетовый, " +
+        "горячее жёлто-бело-красное; rainbow — холод фиолетово-синий, тёплое зелёное, горячее " +
+        "жёлто-белое; arctic — холод тёмно-синий, горячее белёсое с оранжевым; whitehot — холод " +
+        "чёрный, горячее белое; blackhot — наоборот; lava — от чёрного к оранжево-белому; " +
+        "jet — холод синий, среднее бирюзово-жёлтое, горячее красное; medical — холод белый, " +
+        "среднее сине-чёрное, горячее оранжево-белое. Если палитра не распознана, уточняйте " +
+        "соответствие цвета температуре по шкале hi/mid/lo в телеметрии, а не по памяти. " +
         "Правила: опирайся только на видимые тепловые зоны и переданные числа; не выдумывай " +
         "температуры, которых нет в кадре; помни, что абсолютные значения могут иметь смещение " +
         "до ±5 °C без калибровки по чёрному телу, а низкая эмиссивность блестящих поверхностей " +
@@ -60,8 +122,10 @@ public partial class ReportWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        WindowTheme.ApplyAll(Themes.IsDark);
         if (!_llm.Enabled) return;
         BtnSend.IsEnabled = false;
+        TypingPill.Visibility = Visibility.Visible;
         try
         {
             string task =
@@ -77,7 +141,7 @@ public partial class ReportWindow : Window
             Append("Агент", a);
         }
         catch (Exception ex) { TxtStatus.Text = "LLM: " + ex.Message; }
-        finally { BtnSend.IsEnabled = _llm.Enabled; }
+        finally { BtnSend.IsEnabled = _llm.Enabled; TypingPill.Visibility = Visibility.Collapsed; }
     }
 
     private async void OnSend(object sender, RoutedEventArgs e) => await Send();
@@ -91,6 +155,7 @@ public partial class ReportWindow : Window
         string text = TxtInput.Text.Trim();
         if (text.Length == 0 || _busy || !_llm.Enabled) return;
         _busy = true; BtnSend.IsEnabled = false;
+        TypingPill.Visibility = Visibility.Visible;
         TxtInput.Clear();
         Append("Вы", text);
         _hist.Add(new LlmClient.Msg("user", text));
@@ -101,7 +166,7 @@ public partial class ReportWindow : Window
             Append("Агент", a);
         }
         catch (Exception ex) { TxtStatus.Text = "LLM: " + ex.Message; }
-        finally { _busy = false; BtnSend.IsEnabled = true; TxtInput.Focus(); }
+        finally { _busy = false; BtnSend.IsEnabled = true; TxtInput.Focus(); TypingPill.Visibility = Visibility.Collapsed; }
     }
 
     private void OnPdf(object sender, RoutedEventArgs e)

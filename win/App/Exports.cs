@@ -9,6 +9,19 @@ namespace SeekIRWin.App;
 /// <summary>Экспорт кадров FW1: PNG/JPG из WriteableBitmap (WPF-энкодеры).</summary>
 public static class Exports
 {
+    /// <summary>PNG-байты -> BitmapSource (для миниатюр в чате).</summary>
+    public static BitmapSource BitmapFromPng(byte[] png)
+    {
+        var bi = new BitmapImage();
+        using var ms = new MemoryStream(png);
+        bi.BeginInit();
+        bi.CacheOption = BitmapCacheOption.OnLoad;
+        bi.StreamSource = ms;
+        bi.EndInit();
+        bi.Freeze();
+        return bi;
+    }
+
     /// <summary>Поворот кадра на 90° против часовой — как на экране (камера
     /// держится вертикально). Raw signal.r16 в галерее не поворачивается.</summary>
     public static BitmapSource Rotated(BitmapSource src) =>

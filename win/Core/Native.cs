@@ -63,7 +63,22 @@ public static partial class Native
     [LibraryImport(Lib, EntryPoint = "skcap_stats")]
     public static partial void Stats(IntPtr c, out int frames, out int ffs, out int errors, out int resyncs, out int connected);
 
+    [LibraryImport(Lib, EntryPoint = "skcap_planck_get")]
+    public static partial void PlanckGet(IntPtr c, out SkPlanck outPlanck);
+
     public static byte[]? Utf8Z(string? s) => s is null ? null : System.Text.Encoding.UTF8.GetBytes(s + "\0");
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct SkPlanck
+{
+    public double R1, B, F, O, R2;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct SkScene
+{
+    public double Emissivity, TReflC, TAtmC, DistanceM, RelHumidity;
 }
 
 public static class SeekConst

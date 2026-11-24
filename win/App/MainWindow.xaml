@@ -6,6 +6,7 @@
         xmlns:local="clr-namespace:SeekIRWin.App"
         mc:Ignorable="d"
         Title="Термография" Width="1100" Height="760" MinWidth="900" MinHeight="600"
+        PreviewKeyDown="OnHotKey" Focusable="True"
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <!-- плоский стиль кнопки: без теней/скруглений, 1px граница -->
@@ -41,62 +42,109 @@
     </Window.Resources>
 
     <DockPanel LastChildFill="True" Background="{DynamicResource CBgBrush}">
-        <!-- toolbar 30px: плотно, один ряд -->
+        <!-- toolbar 30px: слева — съёмка; по центру — картинка; справа — анализ.
+             Фокус: Grid, группы не налезают друг на друга -->
         <Border DockPanel.Dock="Top" Height="30" Background="{DynamicResource CPanelBrush}"
                 BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="0,0,0,1">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0">
-                <Button x:Name="BtnConnect" Content="Подключить" Width="90" Click="OnConnect" />
-                <Separator Width="8" Background="Transparent" />
-                <Button x:Name="BtnFreeze" Content="Пауза" Width="60" IsEnabled="False" Click="OnFreeze" />
-                <Separator Width="8" Background="Transparent" />
-                <Button x:Name="BtnSnap" Content="Снимок" Width="70" IsEnabled="False" Click="OnSnap" />
-                <Separator Width="8" Background="Transparent" />
-                <Button x:Name="BtnExportJpg" Content="JPG" Width="44" IsEnabled="False" Click="OnExport" />
-                <Separator Width="4" Background="Transparent" />
-                <Button x:Name="BtnExportPng" Content="PNG" Width="44" IsEnabled="False" Click="OnExport" />
-                <Separator Width="8" Background="Transparent" />
-                <Button x:Name="BtnHotmap" Content="Карта шума" Width="90" IsEnabled="False" Click="OnHotmap" />
-                <Separator Width="12" Background="Transparent" />
-                <Button x:Name="BtnRec" Content="Запись" Width="70" IsEnabled="False" Click="OnRec" />
-                <TextBlock x:Name="TxtRec" Text="" Width="70" VerticalAlignment="Center"
-                           FontSize="12" FontFamily="Consolas"
-                           Foreground="{DynamicResource CAccentBrush}" />
-                <Separator Width="12" Background="Transparent" />
-                <Button x:Name="BtnScene" Content="Сцена…" Width="64" Click="OnScene"
-                        ToolTip="ε материала, отражённая температура, воздух, дистанция" />
-                <Separator Width="12" Background="Transparent" />
-                <Button x:Name="BtnCalib" Content="Калибровка…" Width="92" IsEnabled="False" Click="OnCalib"
-                        ToolTip="планк-калибровка по 2 опорным точкам под управлением LLM" />
-                <Separator Width="12" Background="Transparent" />
-                <Button x:Name="BtnReport" Content="Отчёт…" Width="64" IsEnabled="False" Click="OnReport"
-                        ToolTip="LLM-интервью по кадру и PDF-отчёт" />
-                <Separator Width="12" Background="Transparent" />
-                <ComboBox x:Name="CmbPalette" Width="110" Height="22" FontSize="12"
-                          ToolTip="палитра" VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
-                <Separator Width="8" Background="Transparent" />
-                <ComboBox x:Name="CmbScale" Width="92" Height="22" FontSize="12"
-                          ToolTip="масштаб: ближний / линейный / кубический"
-                          VerticalContentAlignment="Center" SelectionChanged="OnScaleMode">
-                    <ComboBoxItem Content="ближний" IsSelected="True" />
-                    <ComboBoxItem Content="линейный" />
-                    <ComboBoxItem Content="кубический" />
-                </ComboBox>
-                <Separator Width="8" Background="Transparent" />
-                <Slider x:Name="SldSmooth" Width="90" Height="18" Minimum="0" Maximum="1"
-                        Value="0.75" VerticalAlignment="Center" ToolTip="сглаживание (F9 smooth)"
-                        IsEnabled="False" ValueChanged="OnSmooth" />
-                <Separator Width="8" Background="Transparent" />
-                <CheckBox x:Name="ChkAutoSpan" Content="авто-span" IsChecked="True"
-                          VerticalAlignment="Center" FontSize="12" Click="OnAutoSpan" />
-                <Separator Width="8" Background="Transparent" />
-                <ComboBox x:Name="CmbTheme" Width="104" Height="22" FontSize="12"
-                          ToolTip="тема: системная / светлая / тёмная"
-                          VerticalContentAlignment="Center" SelectionChanged="OnTheme">
-                    <ComboBoxItem Content="Системная" IsSelected="True" />
-                    <ComboBoxItem Content="Светлая" />
-                    <ComboBoxItem Content="Тёмная" />
-                </ComboBox>
-            </StackPanel>
+            <Grid Margin="4,0">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <Button x:Name="BtnConnect" Width="28" Click="OnConnect"
+                            ToolTip="Подключить тепловизор" Padding="0">
+                        <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoPower}" />
+                    </Button>
+                    <Separator Width="4" Background="Transparent" />
+                    <Button x:Name="BtnFreeze" Width="28" IsEnabled="False" Click="OnFreeze"
+                            ToolTip="Пауза / продолжить (пробел)" Padding="0">
+                        <Path x:Name="FreezeIco" Style="{StaticResource IcoStroke}" Data="{StaticResource IcoPause}" />
+                    </Button>
+                    <Button x:Name="BtnSnap" Width="28" IsEnabled="False" Click="OnSnap"
+                            ToolTip="Снимок: raw + PNG + метаданные в галерею (S)" Padding="0">
+                        <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoCamera}" />
+                    </Button>
+                    <Button x:Name="BtnExportJpg" Width="40" Height="22" FontSize="10" Content="JPG"
+                            IsEnabled="False" Click="OnExport" ToolTip="Сохранить кадр в JPG" />
+                    <Separator Width="2" Background="Transparent" />
+                    <Button x:Name="BtnExportPng" Width="40" Height="22" FontSize="10" Content="PNG"
+                            IsEnabled="False" Click="OnExport" ToolTip="Сохранить кадр в PNG" />
+                    <Separator Width="8" Background="Transparent" />
+                    <Button x:Name="BtnRec" Width="28" IsEnabled="False" Click="OnRec" Padding="0"
+                            ToolTip="Запись видео MP4 + радиометрический sidecar">
+                        <Path x:Name="RecIco" Style="{StaticResource IcoFill}" Data="{StaticResource IcoRecord}" />
+                    </Button>
+                    <TextBlock x:Name="TxtRec" Text="" Width="46" VerticalAlignment="Center"
+                               FontSize="12" FontFamily="Consolas"
+                               Foreground="{DynamicResource CAccentBrush}" />
+                    <Separator Width="8" Background="Transparent" />
+                    <Button x:Name="BtnGallery" Width="28" Click="OnGallery" Padding="0"
+                            ToolTip="Галерея снимков и видео (папка «Мои рисунки\Термография»)">
+                        <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoGallery}" />
+                    </Button>
+                    <Button x:Name="BtnHotmap" Width="28" IsEnabled="False" Click="OnHotmap" Padding="0"
+                            ToolTip="Карта шумных пикселей: нажать ещё раз для завершения">
+                        <Path x:Name="NoiseIco" Style="{StaticResource IcoStroke}" Data="{StaticResource IcoNoise}" />
+                    </Button>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <ComboBox x:Name="CmbPalette" Width="96" Height="24" FontSize="12"
+                              ToolTip="Палитра" VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
+                    <Separator Width="5" Background="Transparent" />
+                    <ComboBox x:Name="CmbScale" Width="88" Height="24" FontSize="12"
+                              ToolTip="Масштабирование кадра"
+                              VerticalContentAlignment="Center" SelectionChanged="OnScaleMode">
+                        <ComboBoxItem Content="ближний" IsSelected="True" />
+                        <ComboBoxItem Content="линейный" />
+                        <ComboBoxItem Content="кубический" />
+                    </ComboBox>
+                    <Separator Width="5" Background="Transparent" />
+                    <Slider x:Name="SldSmooth" Width="72" Height="18" Minimum="0" Maximum="1"
+                            Value="0.75" VerticalAlignment="Center" ToolTip="Сглаживание шума"
+                            IsEnabled="False" ValueChanged="OnSmooth" />
+                    <Separator Width="5" Background="Transparent" />
+                    <CheckBox x:Name="ChkAutoSpan" Content="авто-шкала" IsChecked="True"
+                              VerticalAlignment="Center" FontSize="12" Click="OnAutoSpan"
+                              ToolTip="Выключите, чтобы задать диапазон вручную на гистограмме" />
+                    <Separator Width="6" Background="Transparent" />
+                    <CheckBox x:Name="ChkIso" Content="изотерма от" VerticalAlignment="Center" FontSize="12"
+                              ToolTip="Подсветить всё теплее порога" Click="OnIso" />
+                    <TextBox x:Name="TxtIso" Text="30" Width="44" Height="24" FontSize="12"
+                             VerticalContentAlignment="Center" TextAlignment="Right"
+                             ToolTip="Порог изотермы, °C" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button Width="28" Click="OnScene" Padding="0"
+                            ToolTip="Сцена: эмиссивность материала, отражённая температура, воздух, дистанция">
+                        <Grid Width="15" Height="15">
+                            <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoSceneLines}" />
+                            <Path Style="{StaticResource IcoFill}" Data="{StaticResource IcoSceneDots}" />
+                        </Grid>
+                    </Button>
+                    <Separator Width="4" Background="Transparent" />
+                    <Button x:Name="BtnCalib" Width="28" IsEnabled="False" Click="OnCalib" Padding="0"
+                            ToolTip="Планк-калибровка по двум опорным точкам под управлением LLM">
+                        <Grid Width="15" Height="15">
+                            <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoCalibCircle}" />
+                            <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoCalibCross}" />
+                        </Grid>
+                    </Button>
+                    <Separator Width="4" Background="Transparent" />
+                    <Button x:Name="BtnReport" Width="28" IsEnabled="False" Click="OnReport" Padding="0"
+                            ToolTip="LLM-интервью по кадру и PDF-отчёт">
+                        <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoReport}" />
+                    </Button>
+                    <Button x:Name="BtnSettings" Width="28" Click="OnSettings" Padding="0"
+                            ToolTip="Настройки LLM: эндпоинт, ключ, модель, проверка связи">
+                        <Path Style="{StaticResource IcoStroke}" Data="{StaticResource IcoGear}" />
+                    </Button>
+                    <Separator Width="8" Background="Transparent" />
+                    <ComboBox x:Name="CmbTheme" Width="100" Height="24" FontSize="12"
+                              ToolTip="Тема оформления"
+                              VerticalContentAlignment="Center" SelectionChanged="OnTheme">
+                        <ComboBoxItem Content="Системная" IsSelected="True" />
+                        <ComboBoxItem Content="Светлая" />
+                        <ComboBoxItem Content="Тёмная" />
+                    </ComboBox>
+                </StackPanel>
+            </Grid>
         </Border>
 
         <!-- status strip 20px -->
@@ -107,38 +155,130 @@
                        Foreground="{DynamicResource CFgDimBrush}" FontFamily="Consolas" />
         </Border>
 
-        <!-- правая колонка: вертикальная палитра-шкала + подписи span -->
-        <Border DockPanel.Dock="Right" Width="104" Background="{DynamicResource CPanelBrush}"
+        <!-- левая колонка: служебная информация (P1 по OSD-спеку: параметры
+             съёмки, калибровка, LLM — всё, что не нужно смотреть каждые 5 с) -->
+        <Border DockPanel.Dock="Left" Width="168" Background="{DynamicResource CPanelBrush}"
+                BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="0,0,1,0">
+            <StackPanel Margin="8,6">
+                <TextBlock Text="КАДР" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                           Margin="0,0,0,2" />
+                <TextBlock x:Name="LbRes" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="320×240 · SeekCP" />
+                <TextBlock x:Name="LbStream" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="-- к/с" />
+                <TextBlock x:Name="LbSpanC" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="шкала: авто" />
+                <TextBlock x:Name="LbIsoC" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="изотерма: выкл" />
+                <TextBlock x:Name="LbDenC" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="сглаживание: 0.75" />
+                <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
+                <TextBlock Text="ИЗМЕРЕНИЯ" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                           Margin="0,0,0,2" />
+                <TextBlock x:Name="LbCenterT" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="центр: --" />
+                <TextBlock x:Name="LbProbeT" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="зонд: --" />
+                <TextBlock x:Name="LbDT" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="ΔT кадра: --" />
+                <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
+                <TextBlock Text="СЦЕНА" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                           Margin="0,0,0,2" />
+                <TextBlock x:Name="LbEps" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="ε: --" />
+                <TextBlock x:Name="LbTRefl" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="T отр: --" />
+                <TextBlock x:Name="LbDist" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource CFgBrush}" Text="дист: --" />
+                <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
+                <TextBlock Text="КАЛИБРОВКА" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                           Margin="0,0,0,2" />
+                <TextBlock x:Name="LbCalib" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap"
+                           Foreground="{DynamicResource CFgBrush}" Text="нет (смещение до ±5 °C)" />
+                <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
+                <TextBlock Text="LLM" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                           Margin="0,0,0,2" />
+                <TextBlock x:Name="LbLlm" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap"
+                           Foreground="{DynamicResource CFgBrush}" Text="не настроен" />
+            </StackPanel>
+        </Border>
+
+        <!-- правая колонка: гистограмма + вертикальная палитра-шкала в °C -->
+        <Border DockPanel.Dock="Right" Width="128" Background="{DynamicResource CPanelBrush}"
                 BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="1,0,0,0">
-            <Grid Margin="6">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="46" />
-                </Grid.ColumnDefinitions>
-                <Grid Grid.Column="0">
-                    <Image x:Name="PaletteImg" Stretch="Fill"
-                           RenderOptions.BitmapScalingMode="NearestNeighbor" />
-                    <!-- span-окно: приглушение вне окна -->
-                    <Rectangle x:Name="SpanMaskTop" VerticalAlignment="Top" Fill="#99000000" Height="0" />
-                    <Rectangle x:Name="SpanMaskBot" VerticalAlignment="Bottom" Fill="#99000000" Height="0" />
-                </Grid>
-                <StackPanel Grid.Column="1">
-                    <TextBlock x:Name="TxtHi" Text="--" FontSize="10" FontFamily="Consolas"
-                               HorizontalAlignment="Right" Foreground="{DynamicResource CFgBrush}" />
-                    <TextBlock x:Name="TxtMid" Text="--" FontSize="10" FontFamily="Consolas"
-                               Foreground="{DynamicResource CFgDimBrush}" Margin="0,2"
-                               HorizontalAlignment="Right" />
-                    <TextBlock x:Name="TxtLo" Text="--" FontSize="10" FontFamily="Consolas"
-                               HorizontalAlignment="Right" Foreground="{DynamicResource CFgBrush}" />
+            <DockPanel Margin="6">
+                <TextBlock DockPanel.Dock="Top" Text="гистограмма" FontSize="10"
+                           Foreground="{DynamicResource CFgDimBrush}" Margin="0,0,0,2" />
+                <!-- F4: гистограмма кадра + перетаскиваемое span-окно (зажми и тяни) -->
+                <Border DockPanel.Dock="Top" Height="92" Margin="0,0,0,6"
+                        Background="{DynamicResource CBgBrush}"
+                        BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="1">
+                    <Grid x:Name="HistHost" ClipToBounds="True" Background="Transparent"
+                          MouseLeftButtonDown="OnHistDown" MouseMove="OnHistMove"
+                          MouseLeftButtonUp="OnHistUp" MouseWheel="OnHistWheel"
+                          ToolTip="ось X = °C; тяни — сдвиг span; колесо — ширина span">
+                        <Image x:Name="HistImg" Stretch="Fill"
+                               RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                        <Rectangle x:Name="HistMaskL" HorizontalAlignment="Left" Fill="#80000000" Width="0"
+                                   IsHitTestVisible="False" />
+                        <Rectangle x:Name="HistMaskR" HorizontalAlignment="Right" Fill="#80000000" Width="0"
+                                   IsHitTestVisible="False" />
+                        <Rectangle x:Name="HistSpanRect" Stroke="{DynamicResource CAccentBrush}"
+                                   StrokeThickness="1" Fill="Transparent"
+                                   IsHitTestVisible="False" />
+                    </Grid>
+                </Border>
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                    <TextBlock Text="мин" FontSize="10" Foreground="{DynamicResource CFgDimBrush}" />
+                    <TextBlock x:Name="TxtFrameMin" Text="--" FontSize="10" FontFamily="Consolas"
+                               HorizontalAlignment="Stretch" Margin="4,0,8,0"
+                               Foreground="{DynamicResource CFgBrush}" />
+                    <TextBlock Text="макс" FontSize="10" Foreground="{DynamicResource CFgDimBrush}" />
+                    <TextBlock x:Name="TxtFrameMax" Text="--" FontSize="10" FontFamily="Consolas"
+                               Margin="4,0,0,0" Foreground="{DynamicResource CFgBrush}" />
                 </StackPanel>
-            </Grid>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="52" />
+                    </Grid.ColumnDefinitions>
+                    <Grid Grid.Column="0" x:Name="ScaleHost">
+                        <Image x:Name="PaletteImg" Stretch="Fill"
+                               RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                        <!-- span-окно: приглушение вне окна -->
+                        <Rectangle x:Name="SpanMaskTop" VerticalAlignment="Top" Fill="#99000000" Height="0" />
+                        <Rectangle x:Name="SpanMaskBot" VerticalAlignment="Bottom" Fill="#99000000" Height="0" />
+                        <!-- динамические отметки мин/макс кадра на шкале °C -->
+                        <Canvas IsHitTestVisible="False">
+                            <Line x:Name="TickMin" Stroke="{DynamicResource CAccentBrush}"
+                                  StrokeThickness="1.2" X1="0" X2="20" />
+                            <Line x:Name="TickMax" Stroke="#FFFF7842"
+                                  StrokeThickness="1.2" X1="0" X2="20" />
+                            <TextBlock x:Name="TickMinTxt" Text="" FontSize="9" FontFamily="Consolas"
+                                       Foreground="{DynamicResource CAccentBrush}" />
+                            <TextBlock x:Name="TickMaxTxt" Text="" FontSize="9" FontFamily="Consolas"
+                                       Foreground="#FFFF7842" />
+                        </Canvas>
+                    </Grid>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock x:Name="TxtHi" Text="--" FontSize="10" FontFamily="Consolas"
+                                   HorizontalAlignment="Right" Foreground="{DynamicResource CFgBrush}" />
+                        <TextBlock x:Name="TxtMid" Text="--" FontSize="10" FontFamily="Consolas"
+                                   Foreground="{DynamicResource CFgDimBrush}" Margin="0,2"
+                                   HorizontalAlignment="Right" />
+                        <TextBlock x:Name="TxtLo" Text="--" FontSize="10" FontFamily="Consolas"
+                                   HorizontalAlignment="Right" Foreground="{DynamicResource CFgBrush}" />
+                    </StackPanel>
+                </Grid>
+            </DockPanel>
         </Border>
 
         <!-- канвас: кадр повёрнут 90° против ч.с. (камера держится вертикально),
              пропорции без растяжения -->
         <Grid Background="{DynamicResource CBgBrush}">
             <Viewbox Stretch="Uniform" Margin="8">
-                <Grid Width="320" Height="240">
+                <Grid x:Name="FrameHost" Width="320" Height="240" Background="Transparent"
+                      MouseLeftButtonDown="OnProbeClick">
                     <Grid.LayoutTransform>
                         <RotateTransform Angle="-90" />
                     </Grid.LayoutTransform>
@@ -184,9 +324,30 @@
                             <TextBlock x:Name="MarkTxt" Text="" FontSize="7" FontFamily="Consolas"
                                        Foreground="#FFFF7842"/>
                         </Border>
+                        <!-- ручной зонд (клик по кадру): белый крест + °C -->
+                        <Canvas x:Name="ProbeG" Visibility="Collapsed">
+                            <Line x:Name="ProbeH" Stroke="#FFFFFFFF" StrokeThickness="0.6"/>
+                            <Line x:Name="ProbeV" Stroke="#FFFFFFFF" StrokeThickness="0.6"/>
+                            <Border x:Name="ProbeTag" Background="#CC000000" BorderBrush="#FFFFFFFF"
+                                    BorderThickness="0.5" Padding="2,0"
+                                    RenderTransformOrigin="0.5,0.5">
+                                <Border.RenderTransform>
+                                    <RotateTransform Angle="90" />
+                                </Border.RenderTransform>
+                                <TextBlock x:Name="ProbeTxt" Text="" FontSize="7" FontFamily="Consolas"
+                                           Foreground="#FFFFFFFF"/>
+                            </Border>
+                        </Canvas>
                     </Canvas>
                 </Grid>
             </Viewbox>
+            <!-- OSD: время съёмки, верхний-левый угол экрана (OSD-спек P1:
+             одиночный угловой бейдж; всё остальное — в панелях, не на кадре) -->
+            <Border x:Name="StampBadge" Background="#99000000" Padding="4,1" Margin="12"
+                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Visibility="Collapsed">
+                <TextBlock x:Name="StampTxt" FontSize="11" FontFamily="Consolas" Foreground="#FFFFFFFF" />
+            </Border>
             <!-- указания LLM-калибровки поверх кадра (экранные координаты) -->
             <Border x:Name="CalibBanner" Background="#CC000000" BorderBrush="#FFFF7842"
                     BorderThickness="1" Padding="6,3" Margin="16" HorizontalAlignment="Left"

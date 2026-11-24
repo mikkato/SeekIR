@@ -7,6 +7,7 @@ namespace SeekIRWin.App;
 public static class Themes
 {
     public enum Mode { Light, Dark, System }
+    public static bool IsDark { get; private set; }
 
     private static readonly Dictionary<string, (string L, string D)> Tok = new()
     {
@@ -19,17 +20,22 @@ public static class Themes
         ["BtnBg"]     = ("#E8E8E8", "#2A2D31"),
         ["BtnHover"]  = ("#D8D8D8", "#34383D"),
         ["StatusBg"]  = ("#F4F4F4", "#1B1D1F"),
+        ["UserBg"]    = ("#E7F1FB", "#1C2833"),
+        ["UserBd"]    = ("#9CC7E8", "#33566E"),
+        ["Rec"]       = ("#D13438", "#F1707A"),
     };
 
     public static void Apply(Mode m)
     {
         bool dark = m == Mode.Dark ||
                     (m == Mode.System && IsSystemDark());
+        IsDark = dark;
         var res = Application.Current.Resources;
         foreach (var (k, v) in Tok)
             res["C" + k + "Brush"] = new System.Windows.Media.SolidColorBrush(
                 (System.Windows.Media.Color)
                 System.Windows.Media.ColorConverter.ConvertFromString(dark ? v.D : v.L));
+        WindowTheme.ApplyAll(dark);
     }
 
     private static bool IsSystemDark()

@@ -9,11 +9,12 @@ using SeekIRWin.Core;
 
 namespace SeekIRWin.App;
 
-/// <summary>Калибровка Планка по двум опорным точкам под управлением LLM:
-/// модель видит телеметрию (каждые 5 с) и выдаёт пошаговые указания —
-/// какое опорное тело, как навести, когда фиксировать; после фита проверяет
-/// адекватность результата (vision + числа). Указания дублируются баннером
-/// прямо на термокадре.</summary>
+/// <summary>Калибровка Планка по двум опорным точкам. Два явных алгоритма:
+/// «Стандартный» — локальные числовые критерии (стабилизация, ΔT ≥ 10 °C,
+/// проверка контакта ±2 °C), LLM не участвует; «С помощником LLM» — модель
+/// видит телеметрию (каждые 5 с) и выдаёт пошаговые указания — какое опорное
+/// тело, как навести, когда фиксировать; после фита проверяет адекватность
+/// результата (vision + числа). Указания дублируются баннером на термокадре.</summary>
 public partial class CalibrationWindow : Window
 {
     public sealed record Snap(byte[] Png, string Facts, double SigCenter, double TCenter, bool Stable);
@@ -25,6 +26,14 @@ public partial class CalibrationWindow : Window
     private readonly List<(double Sig, double TrueC)> _pts = [];
     private bool _busy, _done;
 
+    // числовые критерии стандартного алгоритма (мировая практика 2-точечной
+    // планк-калибровки: точки разносят минимум на 10 °C, кадр берётся только
+    // на стабилизировавшемся сигнале, контрольная точка — ±2 °C к контакту)
+    private const double MinDeltaT = 10.0;
+    private const double VerifyTolC = 2.0;
+
+    private bool LlmMode => RbtLlm.IsChecked == true;
+
     public CalibrationWindow(MainWindow main, LlmClient llm)
     {
         _main = main; _llm = llm;
@@ -33,14 +42,66 @@ public partial class CalibrationWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        _hist.Add(new LlmClient.Msg("system", Sys));
-        if (!_llm.Enabled)
+        WindowTheme.ApplyAll(Themes.IsDark);
+        ApplyMode();
+    }
+
+    private void OnMode(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        ResetRun();
+        ApplyMode();
+    }
+
+    private void ResetRun()
+    {
+        _timer.Stop();
+        _pts.Clear(); _hist.Clear(); _busy = false; _done = false;
+        Log.Items.Clear();
+        BtnGrab.IsEnabled = true; BtnFit.IsEnabled = false; BtnCheck.IsEnabled = false;
+        _main.SetCalibHint("");
+    }
+
+    private void ApplyMode()
+    {
+        if (!IsLoaded) return;
+        if (!LlmMode)
         {
-            TxtHint.Text = "LLM не настроен: калибруйте вручную (2 точки + «Калибровать»).";
-            BtnGrab.IsEnabled = true;
+            // ---- стандартный алгоритм: всё локально, модель не вызывается ----
+            ChkAuto.Visibility = Visibility.Collapsed;
+            TxtAlgoNote.Text =
+                "Классическая 2-точечная калибровка Планка (FLIR/Testo practice). 1) Два опорных " +
+                $"тела с КОНТАКТНО измеренной температурой, ΔT ≥ {MinDeltaT:0} °C (тёплая вода " +
+                "~50 °C и лёд/ледяная вода ~0 °C — самые доступные). Блестящую посуду оклейте " +
+                "матовной чёрной изолентой (ε≈0.95) — на неё и наводьте. 2) Стенка/лента должна " +
+                "заполнить центр кадра (голубое перекрестие) без границ и бликов; дайте показаниям " +
+                "стабилизироваться (~10 с после наведения). 3) «Зафиксировать точку». 4) То же для " +
+                "второго тела. 5) «Калибровать» — коэффициенты Планка применятся и сохранятся. " +
+                $"6) «Проверить»: любое третье тело + его контактная температура, допуск ±{VerifyTolC:0.#} °C. " +
+                "Совет: камере после включения дайте прогреться ≥ 5 мин — дрейф матрицы влияет на результат.";
+            BtnCheck.IsEnabled = false;
+            _main.SetCalibHint("Калибровка: стандартный режим — наведите центр на первое опорное тело.");
+            TxtHint.Text = "Стандартный режим: наведите центр кадра на первое опорное тело и ждите стабилизации.";
+            TxtStatus.Text = "Точек: 0/2. LLM не участвует.";
             return;
         }
+        // ---- LLM-режим ----
+        ChkAuto.Visibility = _llm.Enabled ? Visibility.Visible : Visibility.Collapsed;
+        if (!_llm.Enabled)
+        {
+            TxtAlgoNote.Text = "LLM не настроен — откройте «Настройки LLM» (шестерёнка в тулбаре) " +
+                               "или калибруйте стандартным алгоритмом.";
+            TxtHint.Text = "LLM не настроен: выберите «Стандартный» или настройте LLM.";
+            TxtStatus.Text = "LLM не настроен.";
+            BtnGrab.IsEnabled = false;
+            return;
+        }
+        TxtAlgoNote.Text =
+            "Модель получает телеметрию каждые 5 с и подсказывает, что делать. «Авто» — модель " +
+            "сама фиксирует точки по типовым температурам (лёд 0 °C, кожа лба ~34 °C) и " +
+            "запускает фит; без «Авто» — фиксируете сами по её готовности.";
         BtnGrab.IsEnabled = true;
+        _hist.Add(new LlmClient.Msg("system", Sys));
         _timer.Start();
         Ask();
     }
@@ -76,7 +137,7 @@ public partial class CalibrationWindow : Window
     // ---- цикл указаний ----
     private async void Ask()
     {
-        if (_busy || _done || !_llm.Enabled) return;
+        if (_busy || _done || !_llm.Enabled || !LlmMode) return;
         _busy = true;
         try
         {
@@ -169,8 +230,27 @@ public partial class CalibrationWindow : Window
         if (!double.TryParse(TxtTrueC.Text.Replace(',', '.'), NumberStyles.Float,
                 CultureInfo.InvariantCulture, out double trueC) || trueC is < -40 or > 120)
         { TxtStatus.Text = "Введите истинную температуру опорного тела (°C)."; return; }
-        GrabPoint(_main.CalibSnapshot(), trueC, "вручную");
-        if (_llm.Enabled) Ask();
+        var snap = _main.CalibSnapshot();
+        if (!LlmMode)
+        {
+            // стандартный алгоритм: жёсткие локальные гейты
+            if (!snap.Stable)
+            { TxtStatus.Text = "Сигнал не стабилизировался — держите камеру неподвижно и повторите."; return; }
+            if (_pts.Count == 1 && Math.Abs(trueC - _pts[0].TrueC) < MinDeltaT)
+            {
+                TxtStatus.Text = $"ΔT с первой точкой {_pts[0].TrueC:F1} °C меньше {MinDeltaT:0} °C — " +
+                                 "возьмите тело с заметно другой температурой.";
+                return;
+            }
+            if (_pts.Count == 1 && (snap.SigCenter - _pts[0].Sig) * (trueC - _pts[0].TrueC) <= 0)
+            {
+                TxtStatus.Text = "Рассогласование: сигнал центра изменился НЕ в ту же сторону, что " +
+                                 "истинная температура. Проверьте, что камера наведена на второе тело.";
+                return;
+            }
+        }
+        GrabPoint(snap, trueC, LlmMode ? "вручную" : "стандарт");
+        if (LlmMode && _llm.Enabled) Ask();
     }
 
     private void GrabPoint(Snap s, double trueC, string how)
@@ -202,6 +282,15 @@ public partial class CalibrationWindow : Window
         LogLine(err == null ? "Планк-коэффициенты применены и сохранены (planck.calib)." : "Фит отклонён: " + err);
         if (err == null)
         {
+            if (!LlmMode)
+            {
+                // стандартный алгоритм: контрольная точка локально
+                BtnCheck.IsEnabled = true;
+                _main.SetCalibHint("Калибровка применена. Контроль: наведите центр на любое тело, введите контакт — «Проверить».");
+                TxtHint.Text = $"Контроль: наведите центр на любое тело, введите его контактную температуру и нажмите «Проверить» (допуск ±{VerifyTolC:0.#} °C).";
+                TxtStatus.Text = "Калибровка применена. Ожидание контрольной точки.";
+                return true;
+            }
             BtnCheck.IsEnabled = _llm.Enabled;
             _main.SetCalibHint("Калибровка применена. Нажмите «Проверить (LLM)».");
             TxtHint.Text = "Калибровка применена. Нажмите «Проверить (LLM)».";
@@ -219,7 +308,23 @@ public partial class CalibrationWindow : Window
     }
 
     // ---- проверка адекватности ----
-    private void OnCheck(object sender, RoutedEventArgs e) => CheckAsync();
+    private void OnCheck(object sender, RoutedEventArgs e)
+    {
+        if (LlmMode) { CheckAsync(); return; }
+        // стандартный алгоритм: локальный контроль третьей точкой
+        if (!double.TryParse(TxtTrueC.Text.Replace(',', '.'), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out double trueC) || trueC is < -40 or > 120)
+        { TxtStatus.Text = "Введите контактную температуру тела в поле и повторите."; return; }
+        var s = _main.CalibSnapshot();
+        double dev = s.TCenter - trueC;
+        string verdict = Math.Abs(dev) <= VerifyTolC
+            ? $"ОК: расхождение {dev:+0.0;-0.0} °C ≤ допуска {VerifyTolC:0.#} °C."
+            : $"ВНИМАНИЕ: расхождение {dev:+0.0;-0.0} °C больше допуска {VerifyTolC:0.#} °C — " +
+              "проверьте ε/отражение, истинность опорных точек, повторите калибровку.";
+        LogLine($"Контроль: контакт {trueC:F1} °C ↔ камера {s.TCenter:F1} °C. {verdict}");
+        TxtHint.Text = verdict;
+        _main.SetCalibHint(verdict);
+    }
 
     private async void CheckAsync()
     {

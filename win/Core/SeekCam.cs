@@ -50,6 +50,7 @@ public sealed class SeekCam : IDisposable
     public void SetScene(double eps, double tRefl, double tAtm, double dist, double rh) =>
         Native.SetScene(_h, eps, tRefl, tAtm, dist, rh);
     public int PlanckLoad(string? path) => Native.PlanckLoad(_h, Native.Utf8Z(path));
+    public SkPlanck PlanckGet() { Native.PlanckGet(_h, out var p); return p; }
     public bool PlanckFit(double s1, double c1, double s2, double c2) =>
         Native.PlanckFit(_h, s1, c1, s2, c2);
     public int PlanckSave(string path) => Native.PlanckSave(_h, Native.Utf8Z(path));
