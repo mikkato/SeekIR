@@ -139,6 +139,7 @@
              съёмки, калибровка, LLM — всё, что не нужно смотреть каждые 5 с) -->
         <Border DockPanel.Dock="Left" Width="168" Background="{DynamicResource CPanelBrush}"
                 BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="0,0,1,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="8,6">
                 <TextBlock Text="ЭКРАН" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
                            Margin="0,0,0,2" />
@@ -173,6 +174,16 @@
                 <CheckBox x:Name="ChkGridOvl" Content="сетка 3×3" FontSize="12" IsChecked="True"
                           Click="OnOvlToggle"
                           ToolTip="Показывать сетку композиции 3×3 на кадре" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
+                    <CheckBox x:Name="ChkRoi" Content="зоны (ROI)" FontSize="12" VerticalAlignment="Center"
+                              Click="OnRoiToggle"
+                              ToolTip="Выделять области рамкой/эллипсом (тянуть мышью по кадру) и получать мин/макс/средн/СКО; Del — удалить выбранную" />
+                </StackPanel>
+                <ComboBox x:Name="CmbRoiShape" Height="22" FontSize="11" Margin="16,0,0,4"
+                          VerticalContentAlignment="Center" ToolTip="Форма новой зоны">
+                    <ComboBoxItem Content="прямоугольник" IsSelected="True" />
+                    <ComboBoxItem Content="эллипс" />
+                </ComboBox>
                 <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
                 <TextBlock Text="КАДР" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
                            Margin="0,0,0,2" />
@@ -196,6 +207,34 @@
                 <TextBlock x:Name="LbDT" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
                            Foreground="{DynamicResource CFgBrush}" Text="ΔT кадра: --" />
                 <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
+                <TextBlock Text="ЗОНЫ / ΔT" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                           Margin="0,0,0,2" />
+                <StackPanel x:Name="ZoneList" />
+                <Grid Margin="0,2,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="4" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ComboBox x:Name="CmbDx" Grid.Column="0" Height="22" FontSize="11"
+                              VerticalContentAlignment="Center" ToolTip="Левый операнд ΔT"
+                              SelectionChanged="OnDeltaSel" />
+                    <ComboBox x:Name="CmbDy" Grid.Column="2" Height="22" FontSize="11"
+                              VerticalContentAlignment="Center" ToolTip="Правый операнд ΔT"
+                              SelectionChanged="OnDeltaSel" />
+                </Grid>
+                <TextBlock x:Name="LbDelta" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap"
+                           Foreground="{DynamicResource CFgBrush}" Text="ΔT: --" Margin="0,2,0,0" />
+                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                    <CheckBox x:Name="ChkRef" Content="опорная" FontSize="11" VerticalAlignment="Center"
+                              Click="OnRefToggle"
+                              ToolTip="Считать ΔT между зоной и заданной опорной температурой" />
+                    <TextBox x:Name="TxtRef" Text="20" Width="40" Height="22" FontSize="11"
+                             Margin="6,0,0,0" TextAlignment="Right" IsEnabled="False"
+                             VerticalContentAlignment="Center" TextChanged="OnRefText"
+                             ToolTip="Опорная температура, °C" />
+                </StackPanel>
+                <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
                 <TextBlock Text="СЦЕНА" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
                            Margin="0,0,0,2" />
                 <TextBlock x:Name="LbEps" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
@@ -215,6 +254,7 @@
                 <TextBlock x:Name="LbLlm" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap"
                            Foreground="{DynamicResource CFgBrush}" Text="не настроен" />
             </StackPanel>
+            </ScrollViewer>
         </Border>
 
         <!-- правая колонка: гистограмма + вертикальная палитра-шкала в °C -->
@@ -292,7 +332,8 @@
         <Grid Background="{DynamicResource CBgBrush}">
             <Viewbox Stretch="Uniform" Margin="8">
                 <Grid x:Name="FrameHost" Width="320" Height="240" Background="Transparent"
-                      MouseLeftButtonDown="OnProbeClick">
+                      MouseLeftButtonDown="OnFrameDown" MouseMove="OnFrameMove"
+                      MouseLeftButtonUp="OnFrameUp">
                     <Grid.LayoutTransform>
                         <RotateTransform Angle="-90" />
                     </Grid.LayoutTransform>
@@ -301,6 +342,8 @@
                     <!-- маркер максимума: перекрестие + подпись, координаты нативные
                          (canvas повёрнут вместе с кадром) -->
                     <Canvas x:Name="Ovl" Width="320" Height="240" IsHitTestVisible="False">
+                        <!-- зоны ROI: фигуры + подписи (слой ниже маркеров) -->
+                        <Canvas x:Name="RoiG" Visibility="Collapsed" />
                         <!-- сетка 3x3 на всём кадре (тумблер «сетка») -->
                         <Canvas x:Name="GridG">
                         <Line X1="106.667" Y1="0" X2="106.667" Y2="240" Stroke="#404CC2FF" StrokeThickness="0.5"/>

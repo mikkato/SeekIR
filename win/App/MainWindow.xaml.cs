@@ -44,6 +44,9 @@ public partial class MainWindow : Window
         // тумблеры оверлеев из конфига
         ChkMarks.IsChecked = _cfg.ShowMarks;
         ChkGridOvl.IsChecked = _cfg.ShowGrid;
+        ChkRoi.IsChecked = _cfg.ShowRoi;
+        RoiG.Visibility = _cfg.ShowRoi ? Visibility.Visible : Visibility.Collapsed;
+        RebuildDeltaCombos();
         ApplyOverlayToggles();
         _cam.FrameArrived += OnFrame; // поток libusb-воркера
         Closed += (_, _) => _cam.Dispose();
@@ -293,6 +296,7 @@ public partial class MainWindow : Window
             UpdateScale(f.Lo, f.Hi);
             UpdateMaxMarker(f);
             UpdateProbe(f);
+            if (ChkRoi.IsChecked == true && _zones.Count > 0) UpdateRois(f);
             UpdateHistogram(f);
             UpdateSideInfo(f);
         });
@@ -926,6 +930,273 @@ public partial class MainWindow : Window
         Canvas.SetLeft(ProbeTag, tx); Canvas.SetTop(ProbeTag, ty);
     }
 
+    // ---- температурные зоны (ROI) и ΔT ----
+    private sealed class Zone
+    {
+        public int Id;
+        public string Letter = "";
+        public bool Ellipse;
+        public double X0, Y0, X1, Y1;        // границы в координатах кадра
+        public System.Windows.Shapes.Shape Fig = null!;
+        public Border Badge = null!;
+        public TextBlock BadgeTxt = null!;
+        public TextBlock Row = null!;        // строка статистики в панели
+        public double Mean = double.NaN;
+    }
+
+    private static readonly Color[] ZoneColors =
+    [
+        Color.FromRgb(0x4C, 0xC2, 0xFF), Color.FromRgb(0x78, 0xD4, 0x42),
+        Color.FromRgb(0xFF, 0xD0, 0x42), Color.FromRgb(0xFF, 0x78, 0x42),
+        Color.FromRgb(0xE0, 0x6A, 0xFF), Color.FromRgb(0xFF, 0x5A, 0x8A),
+    ];
+    private readonly List<Zone> _zones = new();
+    private Zone? _zoneSel;
+    private int _zoneSeq;
+    private bool _roiDrag;
+    private double _roiAx, _roiAy;
+    private System.Windows.Shapes.Shape? _roiPrev;
+
+    private static System.Windows.Shapes.Shape MakeFig(bool ellipse, Color c, double thick)
+    {
+        System.Windows.Shapes.Shape s = ellipse
+            ? new System.Windows.Shapes.Ellipse() : new System.Windows.Shapes.Rectangle();
+        s.Stroke = new SolidColorBrush(c);
+        s.StrokeThickness = thick;
+        s.Fill = Brushes.Transparent;
+        return s;
+    }
+
+    private static void PlaceFig(System.Windows.Shapes.Shape s, double x0, double y0, double x1, double y1)
+    {
+        Canvas.SetLeft(s, Math.Min(x0, x1)); Canvas.SetTop(s, Math.Min(y0, y1));
+        s.Width = Math.Abs(x1 - x0); s.Height = Math.Abs(y1 - y0);
+    }
+
+    private void OnRoiToggle(object sender, RoutedEventArgs e)
+    {
+        RoiG.Visibility = ChkRoi.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        _cfg.ShowRoi = ChkRoi.IsChecked == true;
+        _cfg.Save();
+    }
+
+    // мышь по кадру: с включёнными зонами — рисование ROI, иначе — прежний зонд
+    private void OnFrameDown(object sender, MouseButtonEventArgs e)
+    {
+        Point p = e.GetPosition(FrameHost);
+        if (ChkRoi.IsChecked != true) { OnProbeClick(sender, e); return; }
+        if (p.X < 0 || p.Y < 0 || p.X >= SeekConst.W || p.Y >= SeekConst.H) return;
+        _roiDrag = true; _roiAx = p.X; _roiAy = p.Y;
+        FrameHost.CaptureMouse();
+        _roiPrev = MakeFig(CmbRoiShape.SelectedIndex == 1, Colors.White, 0.8);
+        PlaceFig(_roiPrev, p.X, p.Y, p.X, p.Y);
+        RoiG.Children.Add(_roiPrev);
+        e.Handled = true;
+    }
+
+    private void OnFrameMove(object sender, MouseEventArgs e)
+    {
+        if (!_roiDrag || _roiPrev is null) return;
+        Point p = e.GetPosition(FrameHost);
+        PlaceFig(_roiPrev, _roiAx, _roiAy,
+                 Math.Clamp(p.X, 0, SeekConst.W), Math.Clamp(p.Y, 0, SeekConst.H));
+    }
+
+    private void OnFrameUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_roiDrag) return;
+        _roiDrag = false;
+        FrameHost.ReleaseMouseCapture();
+        bool ellipse = _roiPrev is System.Windows.Shapes.Ellipse;
+        if (_roiPrev is not null) RoiG.Children.Remove(_roiPrev);
+        _roiPrev = null;
+        Point p = e.GetPosition(FrameHost);
+        double x1 = Math.Clamp(p.X, 0, SeekConst.W), y1 = Math.Clamp(p.Y, 0, SeekConst.H);
+        if (Math.Abs(x1 - _roiAx) < 3 || Math.Abs(y1 - _roiAy) < 3) return; // слишком мелко
+        AddZone(ellipse, Math.Min(_roiAx, x1), Math.Min(_roiAy, y1),
+                Math.Max(_roiAx, x1), Math.Max(_roiAy, y1));
+    }
+
+    private void AddZone(bool ellipse, double x0, double y0, double x1, double y1)
+    {
+        var z = new Zone
+        {
+            Id = _zoneSeq,
+            Letter = ((char)('A' + _zoneSeq % 26)).ToString(),
+            Ellipse = ellipse,
+            X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
+        };
+        _zoneSeq++;
+        var c = ZoneColors[_zones.Count % ZoneColors.Length];
+        z.Fig = MakeFig(ellipse, c, 1.0);
+        PlaceFig(z.Fig, x0, y0, x1, y1);
+        RoiG.Children.Add(z.Fig);
+        z.BadgeTxt = new TextBlock
+        {
+            FontSize = 7,
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(c),
+        };
+        z.Badge = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0xCC, 0, 0, 0)),
+            BorderBrush = new SolidColorBrush(c),
+            BorderThickness = new Thickness(0.5),
+            Padding = new Thickness(2, 0, 2, 0),
+            RenderTransform = new RotateTransform(90),   // компенсация -90 канваса
+            RenderTransformOrigin = new Point(0.5, 0.5),
+            Child = z.BadgeTxt,
+        };
+        Canvas.SetLeft(z.Badge, Math.Clamp(x0, 0, SeekConst.W - 46));
+        Canvas.SetTop(z.Badge, Math.Max(0, y0 - 11));
+        RoiG.Children.Add(z.Badge);
+        z.Row = new TextBlock
+        {
+            FontSize = 11,
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = (Brush)FindResource("CFgBrush"),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Text = $"{z.Letter}: --",
+            Cursor = Cursors.Hand,
+        };
+        z.Row.MouseLeftButtonUp += (_, _) => SelectZone(z);
+        ZoneList.Children.Add(z.Row);
+        _zones.Add(z);
+        SelectZone(z);
+        RebuildDeltaCombos();
+        if (_lastFrame is { } f) UpdateRois(f);
+    }
+
+    private void SelectZone(Zone? z)
+    {
+        _zoneSel = z;
+        var hl = (Brush)FindResource("CBgBrush");
+        foreach (var q in _zones)
+        {
+            q.Fig.StrokeThickness = q == z ? 1.6 : 1.0;
+            q.Row.Background = q == z ? hl : Brushes.Transparent;
+        }
+    }
+
+    private void DeleteSelectedZone()
+    {
+        if (_zoneSel is null) return;
+        RoiG.Children.Remove(_zoneSel.Fig);
+        RoiG.Children.Remove(_zoneSel.Badge);
+        ZoneList.Children.Remove(_zoneSel.Row);
+        _zones.Remove(_zoneSel);
+        _zoneSel = _zones.Count > 0 ? _zones[^1] : null;
+        SelectZone(_zoneSel);
+        RebuildDeltaCombos();
+    }
+
+    /// <summary>Мин/макс/средн/СКО по маске зоны на радиометрическом потоке.</summary>
+    private void UpdateRois(SeekCam.Frame f)
+    {
+        foreach (var z in _zones)
+        {
+            int x0 = Math.Max(0, (int)Math.Floor(z.X0)), x1 = Math.Min(SeekConst.W - 1, (int)Math.Ceiling(z.X1));
+            int y0 = Math.Max(0, (int)Math.Floor(z.Y0)), y1 = Math.Min(SeekConst.H - 1, (int)Math.Ceiling(z.Y1));
+            double cx = (x0 + x1) / 2.0, cy = (y0 + y1) / 2.0;
+            double rx = Math.Max(0.5, (x1 - x0) / 2.0), ry = Math.Max(0.5, (y1 - y0) / 2.0);
+            double mn = double.MaxValue, mx = double.MinValue, s = 0, s2 = 0; int n = 0;
+            for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++)
+                {
+                    if (z.Ellipse)
+                    {
+                        double dx = (x - cx) / rx, dy = (y - cy) / ry;
+                        if (dx * dx + dy * dy > 1) continue;
+                    }
+                    double t = f.Temp[y * SeekConst.W + x];
+                    if (double.IsNaN(t)) continue;
+                    if (t < mn) mn = t;
+                    if (t > mx) mx = t;
+                    s += t; s2 += t * t; n++;
+                }
+            if (n == 0) { z.Mean = double.NaN; continue; }
+            double mean = s / n;
+            double sd = Math.Sqrt(Math.Max(0, s2 / n - mean * mean));
+            z.Mean = mean;
+            z.Row.Text = $"{z.Letter}: {mean:F1} ±{sd:F1} ({mn:F1}…{mx:F1})";
+            z.Row.ToolTip = $"зона {z.Letter}: n={n} · среднее {mean:F2} · СКО {sd:F2} · " +
+                            $"мин {mn:F2} · макс {mx:F2} °C";
+            z.BadgeTxt.Text = $"{z.Letter} {mean:F1}";
+        }
+        UpdateDelta();
+    }
+
+    // ---- ΔT: две зоны, зона↔кадр или зона↔опорная температура ----
+    private void RebuildDeltaCombos()
+    {
+        string?[] keep =
+        {
+            (CmbDx.SelectedItem as ComboBoxItem)?.Content?.ToString(),
+            (CmbDy.SelectedItem as ComboBoxItem)?.Content?.ToString(),
+        };
+        ComboBox[] cmb = { CmbDx, CmbDy };
+        for (int k = 0; k < 2; k++)
+        {
+            var c = cmb[k];
+            c.SelectionChanged -= OnDeltaSel;
+            c.Items.Clear();
+            c.Items.Add(new ComboBoxItem { Content = "—" });
+            foreach (var z in _zones) c.Items.Add(new ComboBoxItem { Content = "зона " + z.Letter });
+            c.Items.Add(new ComboBoxItem { Content = "макс кадра" });
+            c.Items.Add(new ComboBoxItem { Content = "мин кадра" });
+            c.Items.Add(new ComboBoxItem { Content = "центр" });
+            if (k == 1 && ChkRef.IsChecked == true) c.Items.Add(new ComboBoxItem { Content = "опора" });
+            int idx = 0;
+            for (int i = 0; i < c.Items.Count; i++)
+                if (((ComboBoxItem)c.Items[i]).Content?.ToString() == keep[k]) idx = i;
+            c.SelectedIndex = idx;
+            c.SelectionChanged += OnDeltaSel;
+        }
+        UpdateDelta();
+    }
+
+    private bool OpValue(string? sel, out double v)
+    {
+        v = double.NaN;
+        if (sel is null || sel == "—") return false;
+        if (sel.StartsWith("зона "))
+        {
+            var z = _zones.FirstOrDefault(q => "зона " + q.Letter == sel);
+            if (z is null || double.IsNaN(z.Mean)) return false;
+            v = z.Mean; return true;
+        }
+        var f = _lastFrame;
+        if (f is null) return false;
+        switch (sel)
+        {
+            case "макс кадра": v = f.Temp.Max(); return true;
+            case "мин кадра": v = f.Temp.Min(); return true;
+            case "центр": v = f.Temp[f.Temp.Length / 2]; return true;
+            case "опора":
+                return double.TryParse(TxtRef.Text.Replace(',', '.'),
+                    System.Globalization.CultureInfo.InvariantCulture, out v);
+        }
+        return false;
+    }
+
+    private void UpdateDelta()
+    {
+        if (!OpValue((CmbDx.SelectedItem as ComboBoxItem)?.Content?.ToString(), out double a) ||
+            !OpValue((CmbDy.SelectedItem as ComboBoxItem)?.Content?.ToString(), out double b))
+        { LbDelta.Text = "ΔT: --"; return; }
+        LbDelta.Text = $"ΔT = {a - b:+0.0;-0.0;0.0} °C";
+    }
+
+    private void OnDeltaSel(object sender, SelectionChangedEventArgs e) => UpdateDelta();
+
+    private void OnRefToggle(object sender, RoutedEventArgs e)
+    {
+        TxtRef.IsEnabled = ChkRef.IsChecked == true;
+        RebuildDeltaCombos();
+    }
+
+    private void OnRefText(object sender, TextChangedEventArgs e) => UpdateDelta();
+
     // ---- горячие клавиши ----
     private void OnIso(object sender, RoutedEventArgs e) { /* читается в OnFrame */ }
 
@@ -953,6 +1224,8 @@ public partial class MainWindow : Window
                 OnCalib(this, new RoutedEventArgs()); e.Handled = true; break;
             case Key.R when BtnReport.IsEnabled:
                 OnReport(this, new RoutedEventArgs()); e.Handled = true; break;
+            case Key.Delete:
+                DeleteSelectedZone(); e.Handled = true; break;
             case Key.Escape:
                 ResetProbe(); e.Handled = true; break;
         }

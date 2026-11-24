@@ -20,6 +20,7 @@ public sealed class AppConfig
     // оверлеи на кадре (тумблеры в тулбаре)
     public bool ShowMarks { get; set; } = true;   // температурные метки мин/макс/центр/зонд
     public bool ShowGrid { get; set; } = true;    // сетка композиции 3×3
+    public bool ShowRoi { get; set; } = false;    // температурные зоны (ROI)
 
     public sealed class SceneSection
     {
