@@ -112,9 +112,17 @@
                     <Separator Width="6" Background="Transparent" />
                     <CheckBox x:Name="ChkIso" Content="изотерма от" VerticalAlignment="Center" FontSize="12"
                               ToolTip="Подсветить всё теплее порога" Click="OnIso" />
-                    <TextBox x:Name="TxtIso" Text="30" Width="44" Height="24" FontSize="12"
+                    <TextBox x:Name="TxtIso" Text="30" Width="44" Height="26" FontSize="12"
+                             Padding="7,1"
                              VerticalContentAlignment="Center" TextAlignment="Right"
                              ToolTip="Порог изотермы, °C" />
+                    <Separator Width="6" Background="Transparent" />
+                    <CheckBox x:Name="ChkMarks" Content="метки °C" VerticalAlignment="Center" FontSize="12"
+                              IsChecked="True" Click="OnOvlToggle"
+                              ToolTip="Показывать температурные метки (мин/макс/центр/зонд) на кадре" />
+                    <CheckBox x:Name="ChkGridOvl" Content="сетка" VerticalAlignment="Center" FontSize="12"
+                              IsChecked="True" Click="OnOvlToggle"
+                              ToolTip="Показывать сетку композиции 3×3 на кадре" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <Button Width="28" Click="OnScene" Padding="0"
@@ -293,7 +301,8 @@
                     <!-- маркер максимума: перекрестие + подпись, координаты нативные
                          (canvas повёрнут вместе с кадром) -->
                     <Canvas x:Name="Ovl" Width="320" Height="240" IsHitTestVisible="False">
-                        <!-- сетка 3x3 на всём кадре -->
+                        <!-- сетка 3x3 на всём кадре (тумблер «сетка») -->
+                        <Canvas x:Name="GridG">
                         <Line X1="106.667" Y1="0" X2="106.667" Y2="240" Stroke="#404CC2FF" StrokeThickness="0.5"/>
                         <Line X1="213.333" Y1="0" X2="213.333" Y2="240" Stroke="#404CC2FF" StrokeThickness="0.5"/>
                         <Line X1="0" Y1="80" X2="320" Y2="80" Stroke="#404CC2FF" StrokeThickness="0.5"/>
@@ -301,11 +310,14 @@
                         <!-- акцент границ центрального квадрата (зона замера) -->
                         <Rectangle Canvas.Left="106.667" Canvas.Top="80" Width="106.667" Height="80"
                                    Stroke="#664CC2FF" StrokeThickness="0.7" Fill="Transparent"/>
+                        </Canvas>
                         <!-- статичная метка в центре зоны замера -->
                         <Line X1="154" Y1="120" X2="172" Y2="120" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
                         <Line X1="163" Y1="111" X2="163" Y2="129" Stroke="#FF4CC2FF" StrokeThickness="0.5"/>
                         <Rectangle Canvas.Left="158.5" Canvas.Top="115.5" Width="9" Height="9"
                                    Stroke="#FF4CC2FF" StrokeThickness="0.7" Fill="Transparent"/>
+                        <!-- температурные метки: мин/макс/центр/зонд (тумблер «метки °C») -->
+                        <Canvas x:Name="MarkG">
                         <!-- живой маркер максимума по всему полю -->
                         <Line x:Name="HLine" Stroke="#FFFF7842" StrokeThickness="0.5"/>
                         <Line x:Name="VLine" Stroke="#FFFF7842" StrokeThickness="0.5"/>
@@ -342,9 +354,10 @@
                                 </Border.RenderTransform>
                                 <TextBlock x:Name="ProbeTxt" Text="" FontSize="7" FontFamily="Consolas"
                                            Foreground="#FFFFFFFF"/>
-                            </Border>
-                        </Canvas>
-                    </Canvas>
+                                </Border>
+                                </Canvas>
+                                </Canvas>
+                                </Canvas>
                 </Grid>
             </Viewbox>
             <!-- OSD: время съёмки, верхний-левый угол экрана (OSD-спек P1:

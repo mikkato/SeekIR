@@ -17,6 +17,9 @@ public sealed class AppConfig
     }
     public LlmSection Llm { get; set; } = new();
     public string Palette { get; set; } = "ironbow";
+    // оверлеи на кадре (тумблеры в тулбаре)
+    public bool ShowMarks { get; set; } = true;   // температурные метки мин/макс/центр/зонд
+    public bool ShowGrid { get; set; } = true;    // сетка композиции 3×3
 
     public sealed class SceneSection
     {

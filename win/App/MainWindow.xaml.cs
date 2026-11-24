@@ -41,6 +41,10 @@ public partial class MainWindow : Window
         CmbPalette.SelectedIndex = palIdx >= 0 ? palIdx : 0;
         Themes.Apply(Themes.Mode.System);
         BuildPaletteStrip(Palettes[CmbPalette.SelectedIndex].Id);
+        // тумблеры оверлеев из конфига
+        ChkMarks.IsChecked = _cfg.ShowMarks;
+        ChkGridOvl.IsChecked = _cfg.ShowGrid;
+        ApplyOverlayToggles();
         _cam.FrameArrived += OnFrame; // поток libusb-воркера
         Closed += (_, _) => _cam.Dispose();
         // автоподключение: тепловизор — основное устройство; ретрай 2 с, пока открыто окно
@@ -102,6 +106,22 @@ public partial class MainWindow : Window
                              $"T_refl={(_cfg.Scene.TReflEqualsAir ? _cfg.Scene.TAtmC : _cfg.Scene.TReflC):0.0} °C, " +
                              $"{_cfg.Scene.DistanceM:0.0} м";
         }
+    }
+
+    // ---- тумблеры оверлеев на кадре ----
+    private void ApplyOverlayToggles()
+    {
+        bool marks = ChkMarks.IsChecked == true, grid = ChkGridOvl.IsChecked == true;
+        MarkG.Visibility = marks ? Visibility.Visible : Visibility.Collapsed;
+        GridG.Visibility = grid ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnOvlToggle(object sender, RoutedEventArgs e)
+    {
+        ApplyOverlayToggles();
+        _cfg.ShowMarks = ChkMarks.IsChecked == true;
+        _cfg.ShowGrid = ChkGridOvl.IsChecked == true;
+        _cfg.Save();
     }
 
     // ---- настройки LLM ----
