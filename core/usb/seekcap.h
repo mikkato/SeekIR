@@ -26,6 +26,8 @@ typedef struct {
     double lo, hi;          /* текущий span (авто или ручной)           */
     double mean_signal;     /* средний сигнал ROI (для калибровки)      */
     double fps;             /* скользящее значение                      */
+    double t_dev_c;         /* температура FPA по внутр. термистору (raw[5],
+                             * бетта-модель B=200 ref=6616@297K, sfalexrog) */
     long frames, ffs, errors, resyncs;
 } skcap_frame_t;
 
@@ -65,6 +67,10 @@ void skcap_set_ff_cb(skcap_t *c, skcap_cb cb, void *user);
 /* Диагностика для UI. */
 void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,
                  long *resyncs, int *connected);
+
+/* Гистограмма типов кадров (fid 0..63 -> счётчик). Буфер у вызывающего,
+ * size=64. Для диагностики калибровочного потока камеры. */
+void skcap_fid_hist(skcap_t *c, long *out64);
 
 #ifdef __cplusplus
 }

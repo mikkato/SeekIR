@@ -58,9 +58,11 @@ struct skcap {
 
     /* статистика */
     long images, ffs, errors, resyncs;
+    long fid_hist[64];   /* счётчик всех типов кадров (диагностика калибрации) */
     double t_fps_start;
     int n_fps;
     double fps;
+    double t_dev_c;        /* внутр. термистор FPA, °C */
 
     /* настройки (под mtx) */
     sk_palette_t pal;
@@ -117,6 +119,15 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
         c->resyncs++;
         return;
     }
+    /* диагностика калибровочного потока: гистограмма всех типов кадров
+     * (PRO на старте шлёт 4/7/8/9/14 — раньше молча отбрасывались) */
+    if (fid < 64) c->fid_hist[fid]++;
+    if (fid != SK_FID_FF && fid != SK_FID_IMAGE && c->dumpdir[0]) {
+        char cp[600];
+        snprintf(cp, sizeof(cp), "%s/cal_%02u.raw", c->dumpdir, fid);
+        FILE *cf = fopen(cp, "wb"); /* перезапись: нужен последний экземпляр */
+        if (cf) { fwrite(raw, 1, SK_RAW_BYTES, cf); fclose(cf); }
+    }
     if (fid == SK_FID_FF) {
         if (!c->ff) c->ff = (uint16_t *)malloc(SK_RAW_BYTES);
         if (c->ff) memcpy(c->ff, raw, SK_RAW_BYTES);
@@ -163,6 +174,11 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
 
     c->images++;
     c->n_fps++;
+    /* внутр. термистор FPA: raw[5] (PRO), бетта-кривая sfalexrog */
+    {
+        double x = (double)raw[5];
+        c->t_dev_c = (x > 0.0) ? (1.0 / (log(x / 6616.0) / 200.0 + 1.0 / 297.0) - 273.15) : 0.0;
+    }
     double t = now();
     if (t - c->t_fps_start > 2.0) {
         c->fps = c->n_fps / (t - c->t_fps_start);
@@ -187,6 +203,7 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
             .lo = c->tm.lo, .hi = c->tm.hi,
             .mean_signal = sk_roi_mean(c->roi),
             .fps = c->fps,
+            .t_dev_c = c->t_dev_c,
             .frames = c->images, .ffs = c->ffs,
             .errors = c->errors, .resyncs = c->resyncs,
         };
@@ -201,7 +218,9 @@ static size_t find_magic(const uint8_t *b, size_t n) {
         uint16_t w0 = (uint16_t)(b[i] | (b[i + 1] << 8));
         if (w0 != SK_FRAME_MAGIC) continue;
         uint16_t fid = (uint16_t)(b[i + 4] | (b[i + 5] << 8));
-        if (fid == 1 || fid == 3 || fid == 6 || fid == 20) return i;
+        /* 1/3/6/20 — наши; 4/7/8/9/14 — калибровочные кадры PRO (gain/
+         * thermistor-кривая/flash), принимаем чтобы не сбивать синхрон */
+        if (fid <= 14 || fid == 20) return i;
     }
     return (size_t)-1;
 }
@@ -601,4 +620,9 @@ void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,
     if (errors) *errors = c->errors;
     if (resyncs) *resyncs = c->resyncs;
     if (connected) *connected = c->connected;
+}
+
+void skcap_fid_hist(skcap_t *c, long *out64) {
+    if (!c || !out64) return;
+    for (int i = 0; i < 64; i++) out64[i] = c->fid_hist[i];
 }

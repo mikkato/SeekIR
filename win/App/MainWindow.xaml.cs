@@ -277,7 +277,8 @@ public partial class MainWindow : Window
             int mid = SeekConst.W * SeekConst.H / 2;
             TxtStatus.Text =
                 $"скорость {f.Fps:F1} к/с · кадров {f.Frames} · шторка {f.Ffs} · ошибок {f.Errors} · " +
-                $"переподключений {f.Resyncs} · шкала {f.Lo:F0}…{f.Hi:F0} · центр {f.Temp[mid]:F1} °C";
+                $"переподключений {f.Resyncs} · шкала {f.Lo:F0}…{f.Hi:F0} · центр {f.Temp[mid]:F1} °C" +
+                (f.TDevC > 0 ? $" · FPA {f.TDevC:F1} °C" : "");
             UpdateScale(f.Lo, f.Hi);
             UpdateMaxMarker(f);
             UpdateProbe(f);

@@ -16,6 +16,7 @@ public struct SkcapFrame
     public double Lo, Hi;     // текущий span
     public double MeanSignal;
     public double Fps;
+    public double TDevC;      // внутр. термистор FPA, °C
     public int Frames, Ffs, Errors, Resyncs; // C long на Win == int
 }
 

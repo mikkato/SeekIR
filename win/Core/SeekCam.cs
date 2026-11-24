@@ -10,7 +10,7 @@ public sealed class SeekCam : IDisposable
 {
     public sealed record Frame(
         byte[] Rgb, double[] Temp, ushort[] Signal,
-        double Lo, double Hi, double MeanSignal, double Fps,
+        double Lo, double Hi, double MeanSignal, double Fps, double TDevC,
         int Frames, int Ffs, int Errors, int Resyncs);
 
     public event Action<Frame>? FrameArrived;
@@ -39,7 +39,7 @@ public sealed class SeekCam : IDisposable
         Marshal.Copy(f.Rgb, rgb, 0, rgb.Length);
         Marshal.Copy(f.Temp, temp, 0, px);
         unsafe { fixed (ushort* d = sig) Buffer.MemoryCopy((void*)f.Signal, d, px * 2, px * 2); }
-        FrameArrived?.Invoke(new Frame(rgb, temp, sig, f.Lo, f.Hi, f.MeanSignal, f.Fps,
+        FrameArrived?.Invoke(new Frame(rgb, temp, sig, f.Lo, f.Hi, f.MeanSignal, f.Fps, f.TDevC,
                                        f.Frames, f.Ffs, f.Errors, f.Resyncs));
     }
 
