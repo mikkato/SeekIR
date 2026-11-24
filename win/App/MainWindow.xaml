@@ -90,40 +90,6 @@
                         <Path x:Name="NoiseIco" Style="{StaticResource IcoStroke}" Data="{StaticResource IcoNoise}" />
                     </Button>
                 </StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <ComboBox x:Name="CmbPalette" Width="96" Height="24" FontSize="12"
-                              ToolTip="Палитра" VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
-                    <Separator Width="5" Background="Transparent" />
-                    <ComboBox x:Name="CmbScale" Width="88" Height="24" FontSize="12"
-                              ToolTip="Масштабирование кадра"
-                              VerticalContentAlignment="Center" SelectionChanged="OnScaleMode">
-                        <ComboBoxItem Content="ближний" IsSelected="True" />
-                        <ComboBoxItem Content="линейный" />
-                        <ComboBoxItem Content="кубический" />
-                    </ComboBox>
-                    <Separator Width="5" Background="Transparent" />
-                    <Slider x:Name="SldSmooth" Width="72" Height="18" Minimum="0" Maximum="1"
-                            Value="0.75" VerticalAlignment="Center" ToolTip="Сглаживание шума"
-                            IsEnabled="False" ValueChanged="OnSmooth" />
-                    <Separator Width="5" Background="Transparent" />
-                    <CheckBox x:Name="ChkAutoSpan" Content="авто-шкала" IsChecked="True"
-                              VerticalAlignment="Center" FontSize="12" Click="OnAutoSpan"
-                              ToolTip="Выключите, чтобы задать диапазон вручную на гистограмме" />
-                    <Separator Width="6" Background="Transparent" />
-                    <CheckBox x:Name="ChkIso" Content="изотерма от" VerticalAlignment="Center" FontSize="12"
-                              ToolTip="Подсветить всё теплее порога" Click="OnIso" />
-                    <TextBox x:Name="TxtIso" Text="30" Width="44" Height="26" FontSize="12"
-                             Padding="7,1"
-                             VerticalContentAlignment="Center" TextAlignment="Right"
-                             ToolTip="Порог изотермы, °C" />
-                    <Separator Width="6" Background="Transparent" />
-                    <CheckBox x:Name="ChkMarks" Content="метки °C" VerticalAlignment="Center" FontSize="12"
-                              IsChecked="True" Click="OnOvlToggle"
-                              ToolTip="Показывать температурные метки (мин/макс/центр/зонд) на кадре" />
-                    <CheckBox x:Name="ChkGridOvl" Content="сетка" VerticalAlignment="Center" FontSize="12"
-                              IsChecked="True" Click="OnOvlToggle"
-                              ToolTip="Показывать сетку композиции 3×3 на кадре" />
-                </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <Button Width="28" Click="OnScene" Padding="0"
                             ToolTip="Сцена: эмиссивность материала, отражённая температура, воздух, дистанция">
@@ -174,6 +140,40 @@
         <Border DockPanel.Dock="Left" Width="168" Background="{DynamicResource CPanelBrush}"
                 BorderBrush="{DynamicResource CBorderBrush}" BorderThickness="0,0,1,0">
             <StackPanel Margin="8,6">
+                <TextBlock Text="ЭКРАН" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
+                           Margin="0,0,0,2" />
+                <ComboBox x:Name="CmbPalette" Height="24" FontSize="12" Margin="0,0,0,4"
+                          ToolTip="Палитра" VerticalContentAlignment="Center" SelectionChanged="OnPalette" />
+                <ComboBox x:Name="CmbScale" Height="24" FontSize="12" Margin="0,0,0,4"
+                          ToolTip="Масштабирование кадра"
+                          VerticalContentAlignment="Center" SelectionChanged="OnScaleMode">
+                    <ComboBoxItem Content="ближний" IsSelected="True" />
+                    <ComboBoxItem Content="линейный" />
+                    <ComboBoxItem Content="кубический" />
+                </ComboBox>
+                <Slider x:Name="SldSmooth" Height="18" Minimum="0" Maximum="1" Margin="0,0,0,2"
+                        Value="0.75" ToolTip="Сглаживание шума"
+                        IsEnabled="False" ValueChanged="OnSmooth" />
+                <TextBlock Text="сглаживание шума" FontSize="10" Margin="0,0,0,4"
+                           Foreground="{DynamicResource CFgDimBrush}" />
+                <CheckBox x:Name="ChkAutoSpan" Content="авто-шкала" IsChecked="True" FontSize="12"
+                          Click="OnAutoSpan" Margin="0,0,0,3"
+                          ToolTip="Выключите, чтобы задать диапазон вручную на гистограмме" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
+                    <CheckBox x:Name="ChkIso" Content="изотерма от" VerticalAlignment="Center" FontSize="12"
+                              ToolTip="Подсветить всё теплее порога" Click="OnIso" />
+                    <TextBox x:Name="TxtIso" Text="30" Width="44" Height="26" FontSize="12"
+                             Padding="7,1" Margin="6,0,0,0"
+                             VerticalContentAlignment="Center" TextAlignment="Right"
+                             ToolTip="Порог изотермы, °C" />
+                </StackPanel>
+                <CheckBox x:Name="ChkMarks" Content="метки °C" FontSize="12" IsChecked="True"
+                          Click="OnOvlToggle" Margin="0,0,0,3"
+                          ToolTip="Показывать температурные метки (мин/макс/центр/зонд) на кадре" />
+                <CheckBox x:Name="ChkGridOvl" Content="сетка 3×3" FontSize="12" IsChecked="True"
+                          Click="OnOvlToggle"
+                          ToolTip="Показывать сетку композиции 3×3 на кадре" />
+                <Border Height="1" Background="{DynamicResource CBorderBrush}" Margin="0,6" />
                 <TextBlock Text="КАДР" FontSize="10" Foreground="{DynamicResource CFgDimBrush}"
                            Margin="0,0,0,2" />
                 <TextBlock x:Name="LbRes" FontSize="11" FontFamily="Consolas" TextTrimming="CharacterEllipsis"
