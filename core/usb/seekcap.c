@@ -72,6 +72,9 @@ struct skcap {
     bool span_manual; double man_lo, man_hi;
     sk_scene_t scene;
     sk_planck_t planck; bool planck_set;
+    double lin_k, lin_off, lin_ref; /* AUD-R2: fit ЛИНЕЙНОЙ модели по 2 телам;
+                                     * lin_k=0 => некалибровано (58.6, off=0) */
+    double mean_d;       /* AUD-R2: средний gain-корр. D кадра (для лин. фита) */
     double dref_ema;     /* скользящая медиана gain-корр. D (самопривязка 0 °C) */
 
     /* дампы */
@@ -117,6 +120,20 @@ static int request_frame(skcap_t *c) {
 static void submit_chunk(skcap_t *c);
 
 static void process_frame(skcap_t *c, uint16_t *raw) {
+    /* AUD-R2: снапшот рантайм-настроек под мьютексом. Раньше den.*, dumpdir,
+     * gainpath, ff_cb читались вне лока, куда писали API-сеттеры — гонки. */
+    float den_smooth; int den_motion, den_spatial;
+    char dumpdir[512], gainpath[512];
+    skcap_cb ff_cb; void *ff_user;
+    pthread_mutex_lock(&c->mtx);
+    den_smooth = c->den.smooth; den_motion = c->den.motion; den_spatial = c->den.spatial;
+    snprintf(dumpdir, sizeof(dumpdir), "%s", c->dumpdir);
+    snprintf(gainpath, sizeof(gainpath), "%s", c->gainpath);
+    ff_cb = c->ff_cb; ff_user = c->ff_user;
+    pthread_mutex_unlock(&c->mtx);
+    /* c->den — состояние только рабочего потока; параметры применим локально */
+    c->den.smooth = den_smooth; c->den.motion = den_motion; c->den.spatial = den_spatial;
+
     uint32_t counter;
     uint16_t fid;
     if (sk_frame_validate(raw, &counter, &fid) != SK_OK) {
@@ -126,9 +143,9 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
     /* диагностика калибровочного потока: гистограмма всех типов кадров
      * (PRO на старте шлёт 4/7/8/9/14 — раньше молча отбрасывались) */
     if (fid < 64) c->fid_hist[fid]++;
-    if (fid != SK_FID_FF && fid != SK_FID_IMAGE && c->dumpdir[0]) {
+    if (fid != SK_FID_FF && fid != SK_FID_IMAGE && dumpdir[0]) {
         char cp[600];
-        snprintf(cp, sizeof(cp), "%s/cal_%02u.raw", c->dumpdir, fid);
+        snprintf(cp, sizeof(cp), "%s/cal_%02u.raw", dumpdir, fid);
         FILE *cf = fopen(cp, "wb"); /* перезапись: нужен последний экземпляр */
         if (cf) { fwrite(raw, 1, SK_RAW_BYTES, cf); fclose(cf); }
     }
@@ -138,7 +155,9 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
          * Проверено на дампе: убирает фикс. узор 292->56 counts,
          * временной FPN 915->119. Сохраняем на диск: камера шлёт её
          * только при подаче питания. */
+        pthread_mutex_lock(&c->mtx); /* AUD-R2: race with gain_path */
         if (!c->gain) c->gain = (float *)malloc(sizeof(float) * SK_W * SK_H);
+        pthread_mutex_unlock(&c->mtx);
         if (c->gain) {
             double sum = 0.0;
             int nvalid = 0;
@@ -159,9 +178,16 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
                     c->gain[i] = g;
                 }
                 c->gain_ready = 1;
-                if (c->gainpath[0]) {
-                    FILE *gf = fopen(c->gainpath, "wb");
-                    if (gf) { fwrite(c->gain, sizeof(float), (size_t)SK_W * SK_H, gf); fclose(gf); }
+                if (gainpath[0]) {
+                    char tmpg[600];
+                    snprintf(tmpg, sizeof(tmpg), "%s.tmp", gainpath);
+                    FILE *gf = fopen(tmpg, "wb");
+                    if (gf) {
+                        fwrite(c->gain, sizeof(float), (size_t)SK_W * SK_H, gf);
+                        fclose(gf);
+                        remove(gainpath);
+                        rename(tmpg, gainpath); /* AUD-R2: atomic cache swap */
+                    }
                 }
             }
         }
@@ -173,7 +199,7 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
         c->ffs++;
         /* доп. доставка FF-ROI для построения карты шума (win/HotmapBuilder);
          * канал опциональный, macOS-Swift им не пользуется */
-        if (c->ff_cb) {
+        if (ff_cb) {
             static uint16_t ffroi[SK_W * SK_H];
             for (int y = 0; y < SK_H; y++)
                 for (int x = 0; x < SK_W; x++)
@@ -181,7 +207,7 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
             skcap_frame_t f = {0};
             f.rgb = c->rgb; f.temp = c->temp; f.signal = ffroi;
             f.ffs = c->ffs;
-            c->ff_cb(c->ff_user, &f);
+            ff_cb(ff_user, &f);
         }
         return;
     }
@@ -228,10 +254,15 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
         double dmed = sum / ((double)SK_W * SK_H);
         if (c->dref_ema < -1e8) c->dref_ema = dmed;
         else c->dref_ema += 0.02 * (dmed - c->dref_ema);
-        const double k = 58.6; /* counts/°C: 21.95 counts/°F кривой ID9 ×2 (PRO) */
+        c->mean_d = dmed; /* AUD-R2: для skcap_linear_fit из UI */
+        /* counts/°C: 58.6 по кривой ID9; после fit по 2 опорным телам —
+         * свои k/off с опорой dref на момент калибровки (lin_ref) */
+        const double k = (c->lin_k > 0.0) ? c->lin_k : 58.6;
+        const double off = (c->lin_k > 0.0)
+            ? c->lin_off + (c->lin_ref - c->dref_ema) / k : 0.0;
         for (size_t i = 0; i < (size_t)SK_W * SK_H; i++) {
             double d = (den64[i] - 16384.0) * (double)c->gain[i];
-            c->temp[i] = c->t_dev_c + (d - c->dref_ema) / k;
+            c->temp[i] = c->t_dev_c + (d - c->dref_ema) / k + off;
         }
     } else {
         for (size_t i = 0; i < (size_t)SK_W * SK_H; i++)
@@ -247,12 +278,12 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
         c->n_fps = 0;
     }
 
-    if (c->dumpdir[0]) {
+    if (dumpdir[0]) {
         char p[600];
-        snprintf(p, sizeof(p), "%s/img_%04d.raw", c->dumpdir, c->frame_idx);
+        snprintf(p, sizeof(p), "%s/img_%04d.raw", dumpdir, c->frame_idx);
         FILE *f = fopen(p, "wb");
         if (f) { fwrite(raw, 1, SK_RAW_BYTES, f); fclose(f); }
-        snprintf(p, sizeof(p), "%s/ff_%04d.raw", c->dumpdir, c->frame_idx);
+        snprintf(p, sizeof(p), "%s/ff_%04d.raw", dumpdir, c->frame_idx);
         f = fopen(p, "wb");
         if (f) { fwrite(c->ff, 1, SK_RAW_BYTES, f); fclose(f); }
         c->frame_idx++;
@@ -263,6 +294,7 @@ static void process_frame(skcap_t *c, uint16_t *raw) {
             .rgb = c->rgb, .temp = c->temp, .signal = c->roi,
             .lo = c->tm.lo, .hi = c->tm.hi,
             .mean_signal = sk_roi_mean(c->roi),
+            .mean_d = c->mean_d,
             .fps = c->fps,
             .t_dev_c = c->t_dev_c,
             .frames = c->images, .ffs = c->ffs,
@@ -466,6 +498,7 @@ static void *worker(void *arg) {
             c->req_bytes = 0;
             c->need_request = 0;
             sk_denoise_reset(&c->den);
+            c->dref_ema = -1e30; /* AUD-R2: new session = new anchor */
             if (request_frame(c) == 0) submit_chunk(c);
         }
         struct timeval tv = {0, 20 * 1000};
@@ -571,8 +604,8 @@ void skcap_set_denoise(skcap_t *c, float smooth, int motion, int spatial,
     c->smooth = smooth;
     c->motion = motion;
     c->spatial = spatial;
-    /* рабочий поток применяет денуаз-параметры из den на кадр; меняем поля
-     * под тем же локом, что и чтение в process_frame */
+    /* рабочие копии den.* process_frame снимает под этим же локом в начале
+     * кадра (AUD-R2); здесь обновляем исходные поля и целевой den */
     c->den.smooth = smooth;
     c->den.motion = motion;
     c->den.spatial = spatial;
@@ -614,6 +647,64 @@ int skcap_planck_load(skcap_t *c, const char *path) {
     c->planck_set = (e == SK_OK);
     pthread_mutex_unlock(&c->mtx);
     return (int)e;
+}
+
+/* Сохранить/загрузить фит ЛИНЕЙНОЙ модели (lin_k/off/ref) в текстовый файл. */
+sk_err_t skcap_linear_save(skcap_t *c, const char *path) {
+    if (!c || !path) return SK_ERR_STATE;
+    pthread_mutex_lock(&c->mtx);
+    double k = c->lin_k, off = c->lin_off, ref = c->lin_ref;
+    pthread_mutex_unlock(&c->mtx);
+    if (k <= 0.0) return SK_ERR_STATE;
+    FILE *f = fopen(path, "wb");
+    if (!f) return SK_ERR_IO;
+    fprintf(f, "# SeekIR линейная калибровка (2 опорных тела, gain-путь)\n");
+    fprintf(f, "lin_k = %.10g\nlin_off = %.10g\nlin_ref = %.10g\n", k, off, ref);
+    fclose(f);
+    return SK_OK;
+}
+
+bool skcap_linear_load(skcap_t *c, const char *path) {
+    if (!c || !path) return false;
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    double k = 0, off = 0, ref = 0; int got = 0;
+    char line[128];
+    while (fgets(line, sizeof line, f)) {
+        char k2[32]; double v;
+        if (sscanf(line, " %31[a-zA-Z_] = %lg", k2, &v) == 2) {
+            if (!strcmp(k2, "lin_k")) { k = v; got |= 1; }
+            else if (!strcmp(k2, "lin_off")) { off = v; got |= 2; }
+            else if (!strcmp(k2, "lin_ref")) { ref = v; got |= 4; }
+        }
+    }
+    fclose(f);
+    if (got != 7 || k < 5.0 || k > 600.0) return false;
+    pthread_mutex_lock(&c->mtx);
+    c->lin_k = k; c->lin_off = off; c->lin_ref = ref;
+    pthread_mutex_unlock(&c->mtx);
+    return true;
+}
+
+bool skcap_linear_fit(skcap_t *c, double tc1, double t1, double tc2, double t2) {
+    /* tc1,tc2 — измеренные камерой °C центра на телах (по текущей модели);
+     * t1,t2 — контактные °C. Ядро переводит tc в D через текущие k/off
+     * (D = dref + (tc - t_dev - off)*k) и решает новую прямую. */
+    if (!c) return false;
+    if (!(fabs(t2 - t1) > 0.5) || !(fabs(tc2 - tc1) > 0.25)) return false;
+    pthread_mutex_lock(&c->mtx);
+    double k0 = (c->lin_k > 0.0) ? c->lin_k : 58.6;
+    double off0 = (c->lin_k > 0.0)
+        ? c->lin_off + (c->lin_ref - c->dref_ema) / c->lin_k : 0.0;
+    double d1 = c->dref_ema + (tc1 - c->t_dev_c - off0) * k0;
+    double d2 = c->dref_ema + (tc2 - c->t_dev_c - off0) * k0;
+    double k = (d2 - d1) / (t2 - t1);
+    if (k < 5.0 || k > 600.0) { pthread_mutex_unlock(&c->mtx); return false; }
+    double off = (t1 - c->t_dev_c) - (d1 - c->dref_ema) / k;
+    double ref = c->dref_ema;
+    c->lin_k = k; c->lin_off = off; c->lin_ref = ref;
+    pthread_mutex_unlock(&c->mtx);
+    return true;
 }
 
 bool skcap_planck_fit(skcap_t *c, double s1, double c1, double s2, double c2) {
@@ -671,8 +762,10 @@ void skcap_dump_dir(skcap_t *c, const char *dir) {
 
 void skcap_set_ff_cb(skcap_t *c, skcap_cb cb, void *user) {
     if (!c) return;
-    c->ff_cb = cb; /* пишется одинжды до/после open; чтение только в pump */
+    pthread_mutex_lock(&c->mtx); /* AUD-R2: writes happen mid-stream */
+    c->ff_cb = cb;
     c->ff_user = user;
+    pthread_mutex_unlock(&c->mtx);
 }
 
 void skcap_stats(skcap_t *c, long *frames, long *ffs, long *errors,
@@ -700,7 +793,9 @@ void skcap_gain_path(skcap_t *c, const char *path) {
     else c->gainpath[0] = 0;
     pthread_mutex_unlock(&c->mtx);
     if (!path) return;
+    pthread_mutex_lock(&c->mtx); /* AUD-R2: race with process_frame (ID4) */
     if (!c->gain) c->gain = (float *)malloc(sizeof(float) * SK_W * SK_H);
+    pthread_mutex_unlock(&c->mtx);
     if (!c->gain) return;
     FILE *f = fopen(path, "rb");
     if (f) {

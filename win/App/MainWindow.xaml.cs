@@ -27,6 +27,8 @@ public partial class MainWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Термография");
 
     // имена палитр совпадают с sk_palette_from_name в C-ядре
+    // «центр кадра» определён один раз: CenterOf() (медиана окна 10x10 вокруг
+    // истинного центра). Раньше индекс W*H/2 давал левый край средней строки.
     private static readonly (string Name, int Id)[] Palettes =
     [
         ("ironbow", 0), ("ironbow2", 1), ("rainbow", 2), ("arctic", 3),
@@ -78,7 +80,6 @@ public partial class MainWindow : Window
         if (_cam.IsOpen) { _retry?.Stop(); return; }
         string? hot = ResolveHotmap();
         if (!_cam.Open(hot)) return;
-        _cam.SetGainPath(GainCachePath()); // NUC-карта ID4: загрузить кэш, писать свежую
         _retry?.Stop();
         BtnConnect.IsEnabled = false;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = BtnHotmap.IsEnabled = true;
@@ -87,16 +88,30 @@ public partial class MainWindow : Window
         BtnReport.IsEnabled = !string.IsNullOrWhiteSpace(_cfg.Llm.BaseUrl);
         BtnCalib.IsEnabled = true;
         SldSmooth.IsEnabled = true;
+        ApplyCameraConfig();
+        TxtStatus.Text = "подключение…";
+    }
+
+    /// <summary>Единственное место, применяющее всё состояние камеры после open
+    /// (gain-кэш, денуаз, палитра, планк, сцена). Вызывается из TryConnect и из
+    /// RestartWithHotmap — раньше перезапуск карты шума терял палитру/сцену/планк.</summary>
+    private void ApplyCameraConfig()
+    {
+        _cam.SetGainPath(GainCachePath()); // NUC-карта ID4: загрузить кэш, писать свежую
         _denReady = true;
         _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
         _cam.SetPalette(Palettes[Math.Max(CmbPalette.SelectedIndex, 0)].Id);
-        // калибровка Планка, если пользователь снимал по чёрному телу (F8)
+        // калибровка Планка, если пользователь снимал по чёрному телу (F8).
+        // Честный статус: дефолт вендора != применённая калибровка.
         string calib = Path.Combine(AppConfig.Dir, "planck.calib");
-        if (File.Exists(calib)) _cam.PlanckLoad(calib);
+        _planckSrc = File.Exists(calib) && _cam.PlanckLoad(calib) == 0 ? "файл planck.calib" : "нет (заводские константы)";
+        // AUD-R2: линейная калибровка (она даёт честные °C на PRO) — своя перезагрузка
+        string linc = Path.Combine(AppConfig.Dir, "linear.calib");
+        _linCalib = File.Exists(linc) && _cam.LinearLoad(linc)
+            ? "фит по 2 телам (файл linear.calib)" : "";
         _radio.SetPlanck(_cam.PlanckGet());
         ResetProbe();
         ApplyScene();
-        TxtStatus.Text = "подключение…";
     }
 
     private void ApplyScene()
@@ -134,7 +149,15 @@ public partial class MainWindow : Window
         ApplyOverlayToggles();
         _cfg.ShowMarks = ChkMarks.IsChecked == true;
         _cfg.ShowGrid = ChkGridOvl.IsChecked == true;
-        _cfg.Save();
+        TrySave();
+    }
+
+    /// <summary>Сохранение конфига без падения обработчика: сбой (залоченный
+    /// антивирусом файл и т.п.) — в diag-лог и статус, не в DispatcherUnhandledException.</summary>
+    private void TrySave()
+    {
+        try { _cfg.Save(); }
+        catch (Exception ex) { Diag.Log("конфиг не сохранился: " + ex.Message); TxtStatus.Text = "конфиг не сохранился: " + ex.Message; }
     }
 
     // ---- настройки LLM ----
@@ -153,22 +176,27 @@ public partial class MainWindow : Window
     private void OnReport(object sender, RoutedEventArgs e)
     {
         if (_bmp is null || _lastFrame is null) return;
-        byte[] png = Exports.Png(Exports.Rotated(_bmp));
+        byte[] png = Exports.Png(_bmp); // Png() сам поворачивает — раньше был двойной поворот на 180°
         var f = _lastFrame;
         var s = _cfg.Scene;
-        int mid = SeekConst.W * SeekConst.H / 2;
         string facts =
             $"Палитра: {(CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "?")}; " +
-            $"span {f.Lo:F0}..{f.Hi:F0} отсч.; центр кадра {f.Temp[mid]:F1} °C\n" +
+            $"span {f.Lo:F0}..{f.Hi:F0} отсч.; центр кадра {CenterOf(f):F1} °C\n" +
             $"ε={s.Emissivity:0.00} ({s.Material}); T_возд={s.TAtmC:0.0} °C; " +
             $"T_refl={(s.TReflEqualsAir ? s.TAtmC : s.TReflC):0.0} °C; " +
             $"дистанция {s.DistanceM:0.0} м; RH {s.RelHumidity:0} %";
-        new ReportWindow(new LlmClient(_cfg.Llm), png, facts) { Owner = this }.Show();
+        new ReportWindow(new LlmClient(_cfg.Llm), png, facts, _linCalib.Length > 0) { Owner = this }.Show();
     }
 
+    // происхождение коэффициентов Планка для честного статуса: «файл planck.calib»,
+    // «фит по 2 опорным телам» или «нет (заводские константы)»
+    private string _planckSrc = "нет (заводские константы)";
+    // калибровка ЛИНЕЙНОЙ модели (попиксельные °C на PRO): пусто = не калибровалась
+    private string _linCalib = "";
     // ---- калибровка под управлением LLM ----
     private CalibrationWindow? _calibWin;
     private readonly Queue<double> _centerHist = new(); // T центра, окно ~40 кадров (~6 c)
+    private DateTime _centerT = DateTime.MinValue;      // гейт накопления ~100 мс
 
     private void OnCalib(object sender, RoutedEventArgs e)
     {
@@ -198,7 +226,7 @@ public partial class MainWindow : Window
     public CalibrationWindow.Snap CalibSnapshot()
     {
         var f = _lastFrame ?? throw new InvalidOperationException("нет кадра");
-        byte[] png = _bmp is null ? [] : Exports.Png(Exports.Rotated(_bmp));
+        byte[] png = _bmp is null ? [] : Exports.Png(_bmp); // Png() сам поворачивает (без двойного поворота)
         double sig = 0, t = 0; int n = 0;
         for (int ry = MidY - 5; ry < MidY + 5; ry++)
             for (int rx = MidX - 5; rx < MidX + 5; rx++)
@@ -207,13 +235,15 @@ public partial class MainWindow : Window
                 sig += f.Signal[i]; t += f.Temp[i]; n++;
             }
         sig /= n; t /= n;
-        // стабилизация: разброс T центра за ~40 кадров < 0.4 °C
+        // стабилизация: разброс T центра за ~40 кадров < 0.4 °C.
+        // ИСТОРИЮ копит RenderFrame (по отсчёту на показанный кадр): раньше она
+        // пополнялась только здесь, и в стандартном режиме (без таймера) на первом
+        // же клике Count=1 -> stable=false навсегда — гейт был недостижим.
+        bool stable;
         lock (_centerHist)
         {
-            _centerHist.Enqueue(t);
-            while (_centerHist.Count > 40) _centerHist.Dequeue();
+            stable = _centerHist.Count >= 15 && _centerHist.Max() - _centerHist.Min() < 0.4;
         }
-        bool stable = _centerHist.Count >= 15 && _centerHist.Max() - _centerHist.Min() < 0.4;
         var s = _cfg.Scene;
         string facts =
             $"span {f.Lo:F0}..{f.Hi:F0} отсч.; fps {f.Fps:F1}\n" +
@@ -222,14 +252,27 @@ public partial class MainWindow : Window
         return new CalibrationWindow.Snap(png, facts, sig, t, stable);
     }
 
-    /// <summary>Планк-фит по 2 точкам + сохранение planck.calib. null = успех.</summary>
-    public string? CalibFit(double s1, double c1, double s2, double c2)
+    /// <summary>Калибровка по 2 опорным телам: линейной модели (реальные пиксельные
+    /// °C на PRO) + Планка (подписи шкалы/зонда). s1,s2 — сигнал центра, tc1,tc2 —
+    /// измеренная камером температура центра, c1,c2 — контактные °C. null = успех.</summary>
+    public string? CalibFit(double s1, double tc1, double c1, double s2, double tc2, double c2)
     {
-        if (Math.Abs(c2 - c1) < 8) return "опорные температуры должны различаться минимум на ~10 °C";
-        if (!_cam.PlanckFit(s1, c1, s2, c2)) return "точки вырождены — сигнал/температуры не дали решения";
+        if (Math.Abs(c2 - c1) < 8) return "опорные температуры должны различаться минимум на 10 °C";
+        // главный фит — линейной модели: только она даёт попиксельные °C на PRO
+        if (!_cam.LinearFit(tc1, c1, tc2, c2))
+            return "точки вырождены — камера не дала устойчивого решения (сдвиг центра слишком мал)";
+        _linCalib = $"фит по 2 телам {DateTime.Now:dd.MM HH:mm}";
+        // планк — для подписей шкалы/зонда (пересчёт сигнал↔°C в UI)
+        _cam.PlanckFit(s1, c1, s2, c2);
+        _planckSrc = "фит по 2 опорным телам";
         _radio.SetPlanck(_cam.PlanckGet());
         ResetProbe();
-        try { _cam.PlanckSave(Path.Combine(AppConfig.Dir, "planck.calib")); }
+        try
+        {
+            _cam.PlanckSave(Path.Combine(AppConfig.Dir, "planck.calib"));
+            if (_cam.LinearSave(Path.Combine(AppConfig.Dir, "linear.calib")) != 0)
+                _linCalib += " (не сохранён — действует до перезапуска)";
+        }
         catch (Exception ex) { return "фит применён, но сохранение не удалось: " + ex.Message; }
         return null;
     }
@@ -274,9 +317,8 @@ public partial class MainWindow : Window
 
     private void OnFrame(SeekCam.Frame f)
     {
-        // снимок берёт raw-сигнал последнего ПОКАЗАННОГО кадра (на паузе — замороженного)
-        if (!_frozen) _lastFrame = f;
-        _rec?.Write(f.Rgb, f.Signal); // запись живого потока (нативная ориентация; ffmpeg повернёт)
+        // запись живого потока (нативная ориентация; ffmpeg повернёт)
+        _rec?.Write(f.Rgb, f.Signal);
         // коалесценция кадров: если рендер ещё в очереди/идёт, промежуточные кадры дропаем —
         // очередь Dispatcher не растёт, UI не отстаёт на накопленных кадрах.
         if (_frozen || _renderPending) return;
@@ -290,6 +332,10 @@ public partial class MainWindow : Window
 
     private void RenderFrame(SeekCam.Frame f)
     {
+        // снимок/калибровка берут raw-сигнал последнего ПОКАЗАННОГО кадра —
+        // присваиваем здесь (UI-поток), а не в OnFrame: раньше sidecar снимка
+        // мог на кадр расходиться с отрисованным PNG
+        if (!_frozen) _lastFrame = f;
         if (_bmp is null)
         {
             _bmp = new WriteableBitmap(SeekConst.W, SeekConst.H, 96, 96,
@@ -313,17 +359,30 @@ public partial class MainWindow : Window
         }
         _bmp.WritePixels(new Int32Rect(0, 0, SeekConst.W, SeekConst.H), px,
                          SeekConst.W * 4, 0);
-        int mid = SeekConst.W * SeekConst.H / 2;
         if ((DateTime.Now - _statT).TotalMilliseconds >= 150)
         {
             _statT = DateTime.Now;
+            double centerC = CenterOf(f); // истинный центр (единое определение)
             TxtStatus.Text =
                 $"скорость {f.Fps:F1} к/с · кадров {f.Frames} · шторка {f.Ffs} · ошибок {f.Errors} · " +
-                $"переподключений {f.Resyncs} · шкала {f.Lo:F0}…{f.Hi:F0} · центр {f.Temp[mid]:F1} °C" +
+                $"переподключений {f.Resyncs} · шкала {f.Lo:F0}…{f.Hi:F0} · центр {centerC:F1} °C" +
                 (f.TDevC > 0 ? $" · FPA {f.TDevC:F1} °C" : "");
             UpdateScale(f.Lo, f.Hi);
         }
         UpdateMaxMarker(f);
+        // история центра для гейта стабилизации калибровки: копить ВСЕГДА
+        // (не зависеть от тумблера «метки»), ~100 мс -> ~40 кадров за 4 с
+        if ((DateTime.Now - _centerT).TotalMilliseconds >= 100)
+        {
+            _centerT = DateTime.Now;
+            double tc = CenterOf(f);
+            if (!double.IsNaN(tc))
+                lock (_centerHist)
+                {
+                    _centerHist.Enqueue(tc);
+                    while (_centerHist.Count > 40) _centerHist.Dequeue();
+                }
+        }
         UpdateProbe(f);
         if (ChkRoi.IsChecked == true && _zones.Count > 0) UpdateRois(f);
         if ((DateTime.Now - _histT).TotalMilliseconds >= 100)
@@ -371,17 +430,19 @@ public partial class MainWindow : Window
             LbDT.Text = $"ΔT кадра: {mx - mn:F1} °C";
             LbDT.ToolTip = $"{mn:F1}…{mx:F1} °C";
         }
-        int mid2 = SeekConst.W * SeekConst.H / 2;
-        LbCenterT.Text = $"центр: {f.Temp[mid2]:F1} °C";
+        LbCenterT.Text = $"центр: {CenterOf(f):F1} °C"; // единое определение центра
         var s = _cfg.Scene;
         LbEps.Text = $"ε: {s.Emissivity:0.00}";
         LbEps.ToolTip = s.Material;
         LbTRefl.Text = $"T отр: {(s.TReflEqualsAir ? s.TAtmC : s.TReflC):F1} °C";
         LbDist.Text = $"дист: {s.DistanceM:F1} м · RH {s.RelHumidity:F0} %";
-        LbCalib.Text = _radio.Ready ? "планк: применена" : "планк: нет (±5 °C)";
-        LbCalib.ToolTip = _radio.Ready
-            ? "коэффициенты Планка из planck.calib применяются к °C"
-            : "калибровка по 2 опорным точкам не выполнялась — абсолютные °C могут быть смещены до ±5 °C";
+        LbCalib.Text = _linCalib.Length > 0 ? "калибровка: " + _linCalib : "калибровки нет";
+        LbCalib.ToolTip = _linCalib.Length > 0
+            ? "линейная модель откалибрована по 2 контактным телам — °C зон/центра/ΔT учтены; " +
+              $"планк-коэффициенты ({_planckSrc}) — для подписей шкалы/зонда. Остаточная " +
+              "погрешность — дрейф FPA и EMA-якорь сцены"
+            : "калибровка по 2 опорным точкам не выполнялась — абсолютные °C могут быть смещены до ±5 °C; " +
+              "относительные измерения (ΔT зона↔зона) работают";
         LbLlm.Text = string.IsNullOrWhiteSpace(_cfg.Llm.BaseUrl)
             ? "не настроен" : $"{_cfg.Llm.Model}";
         LbLlm.ToolTip = string.IsNullOrWhiteSpace(_cfg.Llm.BaseUrl) ? "откройте настройки (шестерёнка)" : _cfg.Llm.BaseUrl;
@@ -606,7 +667,7 @@ public partial class MainWindow : Window
         Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
         Palette = CmbPalette.SelectedIndex >= 0 ? Palettes[CmbPalette.SelectedIndex].Name : "ironbow",
         SpanLo = f.Lo, SpanHi = f.Hi, SpanAuto = ChkAutoSpan.IsChecked == true,
-        Fps = fps, CenterCelsius = f.Temp[SeekConst.W * SeekConst.H / 2],
+        Fps = fps, CenterCelsius = CenterOf(f),
         MeanSignal = f.MeanSignal,
         Smooth = (float)SldSmooth.Value, Motion = SeekConst.Motion, Spatial = SeekConst.Spatial,
         Hotmap = ResolveHotmap() ?? "",
@@ -765,11 +826,13 @@ public partial class MainWindow : Window
 
     private void FinishHotmap(HotmapBuilder b)
     {
+        // сначала гасим FF-канал: иначе AddFf на воркере пишет в _frames
+        // параллельно с ForceCompute/Save на UI (гонка, partial строка)
+        _cam.SetFfCallback(null);
         // builder считает маску по достижении TargetFf; для досрочного — пересчёт
         if (!b.IsDone) b.ForceCompute();
         string path = HotmapPath();
         b.Save(path);
-        _cam.SetFfCallback(null);
         _hm = null;
         NoiseIco.Data = (Geometry)FindResource("IcoNoise");
         NoiseIco.Fill = System.Windows.Media.Brushes.Transparent;
@@ -791,13 +854,12 @@ public partial class MainWindow : Window
         _cam = new SeekCam();
         _cam.FrameArrived += OnFrame;
         bool ok = _cam.Open(File.Exists(hotpath) ? hotpath : ResolveHotmap());
-        if (ok) _cam.SetGainPath(GainCachePath());
         BtnHotmap.IsEnabled = ok;
         BtnFreeze.IsEnabled = BtnSnap.IsEnabled = ok;
         BtnExportJpg.IsEnabled = BtnExportPng.IsEnabled = ok;
         BtnConnect.IsEnabled = !ok;
-        SldSmooth.IsEnabled = _denReady = ok;
-        if (ok) _cam.SetDenoise((float)SldSmooth.Value, SeekConst.Motion, SeekConst.Spatial, reset: true);
+        SldSmooth.IsEnabled = ok;
+        if (ok) ApplyCameraConfig(); // палитра/сцена/планк/denoise/gain — всё, как при обычном connect
         if (!ok) StartRetryTimer();
         if (!ok) TxtStatus.Text = "камера не вернулась после перезапуска (пероткните USB)";
     }
@@ -1018,7 +1080,7 @@ public partial class MainWindow : Window
     {
         RoiG.Visibility = ChkRoi.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         _cfg.ShowRoi = ChkRoi.IsChecked == true;
-        _cfg.Save();
+        TrySave();
     }
 
     // мышь по кадру: с включёнными зонами — рисование ROI, иначе — прежний зонд
@@ -1191,7 +1253,7 @@ public partial class MainWindow : Window
                         if (dx * dx + dy * dy > 1) continue;
                     }
                     double t = f.Temp[y * SeekConst.W + x];
-                    if (double.IsNaN(t)) continue;
+                    if (double.IsNaN(t) || t < -200) continue; // заглушка ядра вне диапазона = -273.15, не NaN
                     if (t < mn) mn = t;
                     if (t > mx) mx = t;
                     s += t; s2 += t * t; n++;
@@ -1253,10 +1315,11 @@ public partial class MainWindow : Window
         {
             case "макс кадра": v = ValidMax(f.Temp); return !double.IsNaN(v);
             case "мин кадра": v = ValidMin(f.Temp); return !double.IsNaN(v);
-            case "центр": v = f.Temp[f.Temp.Length / 2]; return true;
+            case "центр": v = CenterOf(f); return !double.IsNaN(v);
             case "опора":
                 return double.TryParse(TxtRef.Text.Replace(',', '.'),
-                    System.Globalization.CultureInfo.InvariantCulture, out v);
+                    System.Globalization.CultureInfo.InvariantCulture, out v)
+                    && !double.IsNaN(v) && !double.IsInfinity(v); // "NaN"/"∞" парсятся InvariantCulture
         }
         return false;
     }
@@ -1274,6 +1337,24 @@ public partial class MainWindow : Window
         double mx = double.MinValue;
         foreach (var v in t) if (v >= -200 && v > mx) mx = v;
         return mx == double.MinValue ? double.NaN : mx;
+    }
+
+    /// <summary>«Центр кадра» как единое определение: медиана окна 10x10 вокруг
+    /// истинного центра (валидные значения). Одно место вместо пяти копий.</summary>
+    private static double CenterOf(SeekCam.Frame f)
+    {
+        const int cx = SeekConst.W / 2, cy = SeekConst.H / 2, r = 5;
+        var vals = new double[100];
+        int n = 0;
+        for (int y = cy - r; y < cy + r; y++)
+            for (int x = cx - r; x < cx + r; x++)
+            {
+                double t = f.Temp[y * SeekConst.W + x];
+                if (t >= -200 && !double.IsNaN(t)) vals[n++] = t;
+            }
+        if (n == 0) return double.NaN;
+        Array.Sort(vals, 0, n);
+        return vals[n / 2];
     }
 
     private void UpdateDelta()

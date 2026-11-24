@@ -96,19 +96,22 @@ public partial class SettingsWindow : Window
 
     private async void OnTest(object sender, RoutedEventArgs e)
     {
-        ApplyFields();
+        // AUD-R2: «Тест» больше НЕ мутирует живой _cfg — тестовый клиент строится
+        // из полей окна; применение — только через «ОК».
         if (BaseUrl.Length == 0) { TxtStatus.Text = "Укажите эндпоинт."; return; }
         BtnTest.IsEnabled = false;
         TxtStatus.Text = "Тестовый запрос…";
         try
         {
-            var llm = new LlmClient(_cfg.Llm);
+            var probe = new AppConfig.LlmSection
+            { BaseUrl = BaseUrl, ApiKey = CurrentKey, Model = TxtModel.Text.Trim() };
+            var llm = new LlmClient(probe);
             string answer = await llm.ChatAsync(new[]
             {
                 new LlmClient.Msg("system", "Ответь ровно: ОК"),
                 new LlmClient.Msg("user", "проверка связи"),
             });
-            TxtStatus.Text = $"Связь есть. Модель «{_cfg.Llm.Model}» ответила: {Trunc(answer.Trim(), 120)}";
+            TxtStatus.Text = $"Связь есть. Модель «{probe.Model}» ответила: {Trunc(answer.Trim(), 120)}";
         }
         catch (Exception ex) { TxtStatus.Text = "Ошибка: " + Trunc(ex.Message, 250); }
         finally { BtnTest.IsEnabled = true; }

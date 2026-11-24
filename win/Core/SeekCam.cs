@@ -10,7 +10,7 @@ public sealed class SeekCam : IDisposable
 {
     public sealed record Frame(
         byte[] Rgb, double[] Temp, ushort[] Signal,
-        double Lo, double Hi, double MeanSignal, double Fps, double TDevC,
+        double Lo, double Hi, double MeanSignal, double MeanD, double Fps, double TDevC,
         int Frames, int Ffs, int Errors, int Resyncs);
 
     public event Action<Frame>? FrameArrived;
@@ -45,7 +45,7 @@ public sealed class SeekCam : IDisposable
             Marshal.Copy(f.Rgb, rgb, 0, rgb.Length);
             Marshal.Copy(f.Temp, temp, 0, px);
             unsafe { fixed (ushort* d = sig) Buffer.MemoryCopy((void*)f.Signal, d, px * 2, px * 2); }
-            FrameArrived?.Invoke(new Frame(rgb, temp, sig, f.Lo, f.Hi, f.MeanSignal, f.Fps, f.TDevC,
+            FrameArrived?.Invoke(new Frame(rgb, temp, sig, f.Lo, f.Hi, f.MeanSignal, f.MeanD, f.Fps, f.TDevC,
                                            f.Frames, f.Ffs, f.Errors, f.Resyncs));
         }
         catch (Exception ex)
@@ -65,6 +65,10 @@ public sealed class SeekCam : IDisposable
     public SkPlanck PlanckGet() { Native.PlanckGet(_h, out var p); return p; }
     public bool PlanckFit(double s1, double c1, double s2, double c2) =>
         Native.PlanckFit(_h, s1, c1, s2, c2);
+    public bool LinearFit(double tc1, double t1, double tc2, double t2) =>
+        Native.LinearFit(_h, tc1, t1, tc2, t2);
+    public int LinearSave(string path) => Native.LinearSave(_h, Native.Utf8Z(path)!);
+    public bool LinearLoad(string path) => Native.LinearLoad(_h, Native.Utf8Z(path)!);
     public int PlanckSave(string path) => Native.PlanckSave(_h, Native.Utf8Z(path)!);
     public void SetDumpDir(string? dir) => Native.DumpDir(_h, Native.Utf8Z(dir));
     public void SetGainPath(string? path) => Native.GainPath(_h, Native.Utf8Z(path));

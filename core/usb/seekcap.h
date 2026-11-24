@@ -24,7 +24,9 @@ typedef struct {
     const double  *temp;    /* °C, SK_W*SK_H                            */
     const uint16_t *signal; /* FF-скорр. ROI-сигнал, SK_W*SK_H          */
     double lo, hi;          /* текущий span (авто или ручной)           */
-    double mean_signal;     /* средний сигнал ROI (для калибровки)      */
+    double mean_signal;     /* средний сигнал ROI (для калибровки)          */
+    double mean_d;          /* AUD-R2: средний gain-корр. D (D-16384) — опора
+                             * линейного фита; 0 если gain-карты ещё нет     */
     double fps;             /* скользящее значение                      */
     double t_dev_c;         /* температура FPA по внутр. термистору (raw[5],
                              * бетта-модель B=200 ref=6616@297K, sfalexrog) */
@@ -55,6 +57,12 @@ int skcap_planck_load(skcap_t *c, const char *path); /* NULL = дефолт */
 bool skcap_planck_fit(skcap_t *c, double s1, double c1, double s2, double c2);
 sk_err_t skcap_planck_save(skcap_t *c, const char *path);
 void skcap_planck_get(skcap_t *c, sk_planck_t *out);
+
+/* AUD-R2: фит ЛИНЕЙНОЙ модели (gain-путь PRO) по 2 опорным телам:
+ * tc1,tc2 — измеренные камерой °C центра на телах, t1,t2 — контактные °C. */
+bool skcap_linear_fit(skcap_t *c, double tc1, double t1, double tc2, double t2);
+sk_err_t skcap_linear_save(skcap_t *c, const char *path);
+bool skcap_linear_load(skcap_t *c, const char *path);
 
 /* Золотые дампы img/ff_NNNN.raw в dir (NULL = выключить). */
 void skcap_dump_dir(skcap_t *c, const char *dir);

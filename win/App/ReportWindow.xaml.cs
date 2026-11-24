@@ -20,12 +20,13 @@ public partial class ReportWindow : Window
     private readonly string _facts;        // телеметрия кадра для контекста
     private readonly DateTime _shotAt;
     private readonly List<LlmClient.Msg> _hist = [];
+    private readonly bool _calibrated; // AUD-R2: сноска/промпт честно зависят от калибровки
     private bool _busy;
 
-    public ReportWindow(LlmClient llm, byte[] png, string facts)
+    public ReportWindow(LlmClient llm, byte[] png, string facts, bool calibrated)
     {
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
-        _llm = llm; _png = png; _facts = facts; _shotAt = DateTime.Now;
+        _llm = llm; _png = png; _facts = facts; _shotAt = DateTime.Now; _calibrated = calibrated;
         InitializeComponent();
         TxtModel.Text = llm.Model;
         if (!_llm.Enabled)
@@ -132,8 +133,9 @@ public partial class ReportWindow : Window
                 "Пользователь прислал термограмму и телеметрию. Дай краткое заключение по изображению " +
                 "(что горячее/холоднее, аномалии, границы зон), затем задай ОДИН уточняющий вопрос " +
                 "для отчёта (объект съёмки, цель, что проверить).";
-            string prompt = task + "\n\nТелеметрия: " + _facts +
-                "\nВсе температуры на изображении могут иметь систематическое смещение (без калибровки по чёрному телу ±5 °C).";
+            string prompt = task + "\n\nТелеметрия: " + _facts + (_calibrated
+                ? "\nКамера откалибрована по 2 опорным телам — смещение абсолютных °C ограничено (порядка ±1-2 °C, дрейф FPA)."
+                : "\nВсе температуры на изображении могут иметь систематическое смещение (без калибровки по чёрному телу ±5 °C).");
             _hist.Add(new LlmClient.Msg("system", SystemPrompt));
             _hist.Add(new LlmClient.Msg("user", prompt));
             string a = await Task.Run(() => _llm.ChatAsync(_hist, prompt, _png));
@@ -216,9 +218,11 @@ public partial class ReportWindow : Window
                         }
                         col.Item().PaddingTop(12).Text("Заключение").Bold();
                         col.Item().Text(conclusion);
-                        col.Item().PaddingTop(20).Text(
-                            "Температуры даны без калибровки по чёрному телу (возможное смещение до ±5 °C). " +
-                            "Экспертиза носит ориентировочный характер.")
+                        col.Item().PaddingTop(20).Text(_calibrated
+                            ? "Температуры даны по калибровке по 2 опорным телам (остаточное смещение — дрейф FPA, " +
+                              "порядка ±1-2 °C). Экспертиза носит ориентировочный характер."
+                            : "Температуры даны без калибровки по чёрному телу (возможное смещение до ±5 °C). " +
+                              "Экспертиза носит ориентировочный характер.")
                             .FontSize(7).FontColor(QuestPDF.Helpers.Colors.Grey.Darken1);
                     });
                 })).GeneratePdf(outPath);

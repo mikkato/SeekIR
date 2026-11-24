@@ -15,6 +15,7 @@ public struct SkcapFrame
     public IntPtr Signal;     // ushort FF-скорр. ROI-сигнал
     public double Lo, Hi;     // текущий span
     public double MeanSignal;
+    public double MeanD;      // AUD-R2: средний gain-корр. D (D-16384), опора лин. фита
     public double Fps;
     public double TDevC;      // внутр. термистор FPA, °C
     public int Frames, Ffs, Errors, Resyncs; // C long на Win == int
@@ -51,6 +52,17 @@ public static partial class Native
     [LibraryImport(Lib, EntryPoint = "skcap_planck_fit")]
     [return: MarshalAs(UnmanagedType.I1)]
     public static partial bool PlanckFit(IntPtr c, double s1, double c1, double s2, double c2);
+
+    [LibraryImport(Lib, EntryPoint = "skcap_linear_fit")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static partial bool LinearFit(IntPtr c, double tc1, double t1, double tc2, double t2);
+
+    [LibraryImport(Lib, EntryPoint = "skcap_linear_save")]
+    public static partial int LinearSave(IntPtr c, byte[] pathUtf8);
+
+    [LibraryImport(Lib, EntryPoint = "skcap_linear_load")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static partial bool LinearLoad(IntPtr c, byte[] pathUtf8);
 
     [LibraryImport(Lib, EntryPoint = "skcap_planck_save")]
     public static partial int PlanckSave(IntPtr c, byte[] pathUtf8);

@@ -24,7 +24,8 @@ public partial class CalibrationWindow : Window
     private readonly LlmClient _llm;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly List<LlmClient.Msg> _hist = [];
-    private readonly List<(double Sig, double TrueC)> _pts = [];
+    private readonly object _histLock = new(); // AUD-R2: история читается фоном (Task.Run)
+    private readonly List<(double Sig, double TMeas, double TrueC)> _pts = [];
     private bool _busy, _done;
 
     // числовые критерии стандартного алгоритма (мировая практика 2-точечной
@@ -59,7 +60,7 @@ public partial class CalibrationWindow : Window
     private void ResetRun()
     {
         _timer.Stop();
-        _pts.Clear(); _hist.Clear(); _busy = false; _done = false;
+        _pts.Clear(); lock (_histLock) _hist.Clear(); _busy = false; _done = false;
         Log.Items.Clear();
         BtnGrab.IsEnabled = true; BtnFit.IsEnabled = false; BtnCheck.IsEnabled = false;
         _main.SetCalibHint("");
@@ -101,7 +102,8 @@ public partial class CalibrationWindow : Window
         }
         TxtAlgoNote.Text =
             "Модель получает телеметрию каждые 5 с и подсказывает, что делать. «Авто» — модель " +
-            "ПРЕДЛАГАЕТ точку и её температуру (лёд 0 °C, кожа лба ~34 °C), но фиксируете вы " +
+            "ПРЕДЛАГАЕТ точку и её температуру (предпочтительна ледяная вода ~0 °C; кожа — " +
+            "КРАЙНЕ СЛАБАЯ опора, только без альтернативы и с контактным замером), но фиксируете вы " +
             "кнопкой «Зафиксировать точку»; без «Авто» — фиксируете сами по её готовности.";
         BtnGrab.IsEnabled = true;
         _hist.Add(new LlmClient.Msg("system", Sys));
@@ -127,10 +129,11 @@ public partial class CalibrationWindow : Window
         "ready=true только когда объект пригоден для фиксации. " +
         "РЕЖИМ АВТО (в сообщении есть слово АВТО и приложен кадр): ты сама выбираешь опорные " +
         "точки по изображению, используя ТИПОВЫЕ физические температуры: тающий лёд/ледяная " +
-        "вода=0 °C; кипящая вода в открытом сосуде=98-100 °C (осторожно); открытый стакан " +
-        "воды комнатной температуры≈T_возд (указан в телеметрии) — слабая точка, лучше не; " +
-        "голая кожа лба человека в комфорте=34±1.5 °C (не лоб в очках/с кремом/потом); " +
-        "черный матовый корпус техники в комнате≈T_возд. Действуй только если центр кадра — " +
+        "вода=0 °C; кипящая вода в открытом сосуде=98-100 °C (осторожно). КОЖА ЧЕЛОВЕКА — " +
+        "НЕметрологическая опора (вариабельна на единицы °C): предлагай её только при полном " +
+        "отсутствии лучшей точки и предупреждай о слабой опоре; открытый стакан воды " +
+        "комнатной температуры≈T_возд — слабая точка, лучше не; чёрный матовый корпус техники " +
+        "в комнате≈T_возд. Действуй только если центр кадра — " +
         "уверенный опорный объект И стабилизация=да; иначе жди. Отвечай СТРОГО JSON: " +
         "{\"action\": \"wait|grab\", \"trueC\": число, \"hint\": \"одно короткое указание\"}. " +
         "action=grab и trueC=твоя оценка истинной температуры только при полной уверенности в " +
@@ -150,13 +153,25 @@ public partial class CalibrationWindow : Window
                 (_pts.Count > 0 ? " (" + string.Join("; ", _pts.Select(p => $"{p.TrueC:0.#} °C → сигнал {p.Sig:F0}")) + ")" : "") +
                 $"\nТелеметрия сейчас: {s.Facts}\nЦентр: сигнал {s.SigCenter:F0}, температура {s.TCenter:F1} °C, стабилизация: {(s.Stable ? "да" : "нет")}";
             string a;
+            // AUD-R2: слайд-окно истории: старые реплики с base64-кадрами переоТПРАВЛЯЛИСЬ
+            // каждый тик (линейный рост цены/задержки). Состояние телеметрии и так
+            // пересылается целиком — держим system + последние 6 обменов.
+            List<LlmClient.Msg> Trim()
+            {
+                lock (_histLock)
+                {
+                    if (_hist.Count > 13) _hist.RemoveRange(1, _hist.Count - 13);
+                    return new List<LlmClient.Msg>(_hist); // снимок: фоновый enumerating не увидит мутаций
+                }
+            }
             if (auto)
             {
-                _hist.Add(new LlmClient.Msg("user", state + "\nРЕЖИМ АВТО" +
-                    (s.Png.Length > 0 ? " (кадр приложен)" : "")));
+                string autoMsg = state + "\nРЕЖИМ АВТО" + (s.Png.Length > 0 ? " (кадр приложен)" : "");
+                List<LlmClient.Msg> snap0;
+                lock (_histLock) { Trim(); _hist.Add(new LlmClient.Msg("user", autoMsg)); snap0 = new List<LlmClient.Msg>(_hist); }
                 a = await Task.Run(() => s.Png.Length > 0
-                    ? _llm.ChatAsync(_hist, state + "\nРЕЖИМ АВТО", s.Png) : _llm.ChatAsync(_hist));
-                _hist.Add(new LlmClient.Msg("assistant", a));
+                    ? _llm.ChatAsync(snap0, autoMsg, s.Png) : _llm.ChatAsync(Trim()));
+                lock (_histLock) _hist.Add(new LlmClient.Msg("assistant", a));
                 var av = ParseAuto(a);
                 TxtHint.Text = av.Hint;
                 if (av.Action == "grab" && av.TrueC is > -40 and < 120 && s.Stable && _pts.Count < 2)
@@ -175,9 +190,11 @@ public partial class CalibrationWindow : Window
             }
             else
             {
-                _hist.Add(new LlmClient.Msg("user", state));
-                a = await Task.Run(() => _llm.ChatAsync(_hist));
-                _hist.Add(new LlmClient.Msg("assistant", a));
+                string manualMsg = state;
+                List<LlmClient.Msg> snap1;
+                lock (_histLock) { _hist.Add(new LlmClient.Msg("user", manualMsg)); snap1 = Trim(); }
+                a = await Task.Run(() => _llm.ChatAsync(snap1));
+                lock (_histLock) _hist.Add(new LlmClient.Msg("assistant", a));
                 var (hint, ready) = Parse(a);
                 TxtHint.Text = hint;
                 _main.SetCalibHint(_pts.Count < 2 ? hint : "Точки собраны — нажмите «Калибровать».");
@@ -237,23 +254,20 @@ public partial class CalibrationWindow : Window
                 CultureInfo.InvariantCulture, out double trueC) || trueC is < -40 or > 120)
         { TxtStatus.Text = "Введите истинную температуру опорного тела (°C)."; return; }
         var snap = _main.CalibSnapshot();
-        if (!LlmMode)
+        // физические гейты ОБЩИЕ для обоих режимов (LLM — подсказчик, не отмена физики)
+        if (!snap.Stable)
+        { TxtStatus.Text = "Сигнал не стабилизировался — держите камеру неподвижно и повторите."; return; }
+        if (_pts.Count == 1 && Math.Abs(trueC - _pts[0].TrueC) < MinDeltaT)
         {
-            // стандартный алгоритм: жёсткие локальные гейты
-            if (!snap.Stable)
-            { TxtStatus.Text = "Сигнал не стабилизировался — держите камеру неподвижно и повторите."; return; }
-            if (_pts.Count == 1 && Math.Abs(trueC - _pts[0].TrueC) < MinDeltaT)
-            {
-                TxtStatus.Text = $"ΔT с первой точкой {_pts[0].TrueC:F1} °C меньше {MinDeltaT:0} °C — " +
-                                 "возьмите тело с заметно другой температурой.";
-                return;
-            }
-            if (_pts.Count == 1 && (snap.SigCenter - _pts[0].Sig) * (trueC - _pts[0].TrueC) <= 0)
-            {
-                TxtStatus.Text = "Рассогласование: сигнал центра изменился НЕ в ту же сторону, что " +
-                                 "истинная температура. Проверьте, что камера наведена на второе тело.";
-                return;
-            }
+            TxtStatus.Text = $"ΔT с первой точкой {_pts[0].TrueC:F1} °C меньше {MinDeltaT:0} °C — " +
+                             "возьмите тело с заметно другой температурой.";
+            return;
+        }
+        if (!LlmMode && _pts.Count == 1 && (snap.SigCenter - _pts[0].Sig) * (trueC - _pts[0].TrueC) <= 0)
+        {
+            TxtStatus.Text = "Рассогласование: сигнал центра изменился НЕ в ту же сторону, что " +
+                             "истинная температура. Проверьте, что камера наведена на второе тело.";
+            return;
         }
         GrabPoint(snap, trueC, LlmMode ? "вручную" : "стандарт");
         if (LlmMode && _llm.Enabled) Ask();
@@ -261,8 +275,8 @@ public partial class CalibrationWindow : Window
 
     private void GrabPoint(Snap s, double trueC, string how)
     {
-        _pts.Add((s.SigCenter, trueC));
-        LogLine($"Точка {_pts.Count} ({how}): истинная {trueC:F1} °C ↔ сигнал {s.SigCenter:F0}");
+        _pts.Add((s.SigCenter, s.TCenter, trueC));
+        LogLine($"Точка {_pts.Count} ({how}): истинная {trueC:F1} °C ↔ сигнал {s.SigCenter:F0}, камера {s.TCenter:F1} °C");
         if (_pts.Count == 1)
         {
             TxtTrueC.Text = "50.0";
@@ -283,9 +297,10 @@ public partial class CalibrationWindow : Window
     private bool FitAndGate()
     {
         if (_pts.Count != 2) return false;
-        string? err = _main.CalibFit(_pts[0].Sig, _pts[0].TrueC, _pts[1].Sig, _pts[1].TrueC);
+        string? err = _main.CalibFit(_pts[0].Sig, _pts[0].TMeas, _pts[0].TrueC,
+                                     _pts[1].Sig, _pts[1].TMeas, _pts[1].TrueC);
         BtnFit.IsEnabled = false;
-        LogLine(err == null ? "Планк-коэффициенты применены и сохранены (planck.calib)." : "Фит отклонён: " + err);
+        LogLine(err == null ? "Калибровка применена (линейная модель + планк; планк сохранён в planck.calib)." : "Фит отклонён: " + err);
         if (err == null)
         {
             if (!LlmMode)
